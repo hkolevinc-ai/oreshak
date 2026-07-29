@@ -81,6 +81,7 @@ KEYWORD_CATEGORY_RULES: list[tuple[re.Pattern[str], str, str]] = [
     (re.compile(r"(шахматен часовник|фигури за шах|пулове|зарове|зарчета|аксесоар.*шах|аксесоар.*табла)"), "25613", "game pieces/accessories"),
     (re.compile(r"(комплект|сет).*(шах|табла)|шах.*табла"), "25615", "board game"),
     (re.compile(r"професионален.*шах|шахмат.*професион"), "51777", "professional chess"),
+    (re.compile(r"(солниц|соларник|salt cellar|salt box)"), "10703", "salt cellar/serveware accessory"),
     (re.compile(r"(черпак|черпало)"), "9998", "ladle"),
     (re.compile(r"(лъжиц|шпатула)"), "9999", "cooking spoon"),
     (re.compile(r"(комплект|сет).*(прибор|кухненск|лъжиц|шпатула)"), "10006", "utensil set"),
@@ -110,6 +111,9 @@ KEYWORD_CATEGORY_RULES: list[tuple[re.Pattern[str], str, str]] = [
 ]
 
 LOW_CONFIDENCE_PRODUCT_RULES: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"бъклиц|манерк|hip\s*flask", re.I), "no flask/drinkware category exists in the supplied Temu template"),
+    (re.compile(r"покривк|tablecloth|чорап|терлиц|пафт", re.I), "finished table linen/apparel is not raw Fabric and no suitable category exists in the supplied Temu template"),
+    (re.compile(r"подков|horseshoe", re.I), "no safe horseshoe/decorative-hardware category exists in the supplied Temu template"),
     (re.compile(r"пепелник|ashtray", re.I), "no ashtray category exists in the supplied Temu template"),
     (re.compile(r"възглавничк|cushion|pillow", re.I), "no cushion category exists in the supplied Temu template"),
     (re.compile(r"фиолк.*есенц|есенц.*лавандул|fragrance vial", re.I), "no fragrance/essential-oil category exists in the supplied Temu template"),
@@ -1085,7 +1089,12 @@ def parse_dimensions(text: str) -> tuple[float, float, float] | None:
         normalized,
         re.I,
     )
-    explicit_depth = _to_cm(depth_match.group(1), depth_match.group(2)) if depth_match else None
+    explicit_depth = None
+    if depth_match:
+        # Internal compartment depth is not an outer product/package dimension.
+        context_before = normalized[max(0, depth_match.start() - 30):depth_match.start()].casefold()
+        if "вътреш" not in context_before and "internal" not in context_before:
+            explicit_depth = _to_cm(depth_match.group(1), depth_match.group(2))
 
     # Prefer outer/closed/frame dimensions. Keep the text between the label and
     # the first number short so the regex cannot drift into a later "inner size".
@@ -1204,14 +1213,13 @@ def category_for(product: Product, overrides: Mapping[str, str], schema: Templat
         return overrides[product.url], "override by product URL", "high"
     # Category detection must be driven by the product identity, not generic words such as
     # "gift" or "wood" appearing later in the description.
-    haystack = normalize_space(" ".join([product.title, product.source_category_name])).casefold()
-    title_only = product.title.casefold()
+    title_only = normalize_space(product.title).casefold()
     for pattern, reason in LOW_CONFIDENCE_PRODUCT_RULES:
         if pattern.search(title_only):
             default = SOURCE_DEFAULTS.get(slug_key(product.source_category_url), "13020")
             return default, reason, "low"
     for pattern, category_id, reason in KEYWORD_CATEGORY_RULES:
-        if pattern.search(haystack) and category_id in schema.category_names:
+        if pattern.search(title_only) and category_id in schema.category_names:
             return category_id, reason, "high"
     default = SOURCE_DEFAULTS.get(slug_key(product.source_category_url), "13020")
     return default, f"source category default: {slug_key(product.source_category_url)}", "medium"
@@ -1393,7 +1401,10 @@ def infer_required_value(column: str, product: Product, variant: Variant, row: d
         age = "18 Years+" if any(word in text for word in ("ловен", "нож", "трофей")) else "14 Years+"
         return choose_valid(dropdown, [age, "12 Years+", "8 Years+"])
     if "Can Be Used For Food Contact" in header:
-        food = category_id in {"9998", "9999", "10006", "10059", "10072", "10638", "10628", "54423", "10740", "10741", "10807", "10808", "10853", "11514", "10905", "10888", "10875", "9923"}
+        always_food_categories = {"9998", "9999", "10006", "10059", "10072", "10638", "10628", "54423", "10740", "10741", "10807", "10808", "11514", "10703", "9923"}
+        explicit_food_use = any(token in text for token in ("за храна", "хранене", "сервиране", "food contact", "food safe", "подходяща за храна", "подходящ за храна"))
+        # Novelty/decorative plates should not be declared food-safe unless the source says so.
+        food = category_id in always_food_categories or (category_id == "10853" and explicit_food_use)
         return choose_valid(dropdown, ["Yes" if food else "No"])
     if "Food Contact Material" in header:
         return choose_valid(dropdown, detect_material_candidates(product, food_contact=True), fallback_first=False)
