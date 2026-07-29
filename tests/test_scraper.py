@@ -254,6 +254,47 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(price, Decimal("77.72"))
         self.assertEqual(list_price, Decimal("81.81"))
 
+    def test_two_dimensional_size_does_not_invent_thickness(self):
+        self.assertIsNone(scraper.parse_dimensions("Размери: 40/40 см. Материал: 100% акрил."))
+
+    def test_depth_is_used_as_third_dimension(self):
+        text = "Размери: 40/11 см. Вътрешна дълбочина: 7 см."
+        self.assertEqual(scraper.parse_dimensions(text), (40.0, 11.0, 7.0))
+
+    def test_two_equal_tiny_dimensions_are_still_treated_as_cube(self):
+        self.assertEqual(scraper.parse_dimensions("Размер: 6.4/6.4 мм."), (0.64, 0.64, 0.64))
+
+    def test_explicit_out_of_stock_text_beats_enabled_cart_button(self):
+        html = '''
+        <div id="content"><div class="product-info">
+          <h1>Покривка</h1><p>Няма наличност</p><button id="button-cart">Купи</button>
+        </div></div>
+        '''
+        soup = BeautifulSoup(html, "lxml")
+        available, source, quantity = scraper.OreshakClient._parse_stock(soup, {})
+        self.assertFalse(available)
+        self.assertEqual(quantity, 0)
+        self.assertIn("availability text", source)
+
+    def test_solid_wood_prefers_log_over_composite_wood(self):
+        class FakeSchema:
+            headers = {"EK": "7317 - Wood Type"}
+            internal_keys = {"EK": "t_3_Wood Type"}
+            @staticmethod
+            def dropdown_for(column, category_id, row):
+                return ["Composite Wood", "Log"]
+        product = scraper.Product(
+            url="https://oreshak.bg/p",
+            source_category_url="https://oreshak.bg/darvorezbovani-pana-i-plastiki",
+            title="ПАНО ОТ ЛИПА",
+            description="Материал: липа",
+            attributes={"Материал": "Дърво", "Дърво": "Липа"},
+            category_id="12151",
+        )
+        variant = scraper.Variant(product=product, option_values={}, sku="1", title="ПАНО", image="x")
+        value = scraper.infer_required_value("EK", product, variant, {}, FakeSchema(), {})
+        self.assertEqual(value, "Log")
+
 
 if __name__ == "__main__":
     unittest.main()
