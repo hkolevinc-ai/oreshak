@@ -1,0 +1,44 @@
+name: Oreshak to Temu scraper
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Maximum source products; 0 means all"
+        required: true
+        default: "10"
+      category:
+        description: "Optional URL slug filter, e.g. nojove-ot-balgaria"
+        required: false
+        default: ""
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Validate template
+        run: python scraper.py --schema-only
+      - name: Run scraper
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.category }}" ]; then
+            python scraper.py --limit "${{ inputs.limit }}" --category "${{ inputs.category }}"
+          else
+            python scraper.py --limit "${{ inputs.limit }}"
+          fi
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oreshak-temu-results
+          path: output/
+          if-no-files-found: warn
+          retention-days: 14
