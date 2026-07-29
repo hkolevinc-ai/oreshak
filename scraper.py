@@ -53,10 +53,10 @@ SOURCE_DEFAULTS: dict[str, str] = {
     "kartini-ot-bulgaria": "12867",
     "komplekti-shah-i-tabla": "25615",
     "kutii-za-aksesoari": "12179",
-    "kutii-za-shah-i-tabla": "12179",
+    "kutii-za-shah-i-tabla": "25615",
     "kuhnenski-aksesoari-ot-darvo-oreshak": "9923",
     "nojove-ot-balgaria": "10059",
-    "profesionalen-shahmat": "51777",
+    "profesionalen-shahmat": "25613",
     "ruchno-izraboteni-chinii-ot-darvo": "10808",
     "kutii-za-vino-i-bijuta": "39880",
     "suveniri": "13020",
@@ -78,8 +78,8 @@ KEYWORD_CATEGORY_RULES: list[tuple[re.Pattern[str], str, str]] = [
     (re.compile(r"\bбуре|бъчв"), "10905", "barrel"),
     (re.compile(r"бъклиц|манерк|кег"), "10888", "flask/keg"),
     (re.compile(r"(трофе|глиги|сръндак|глиган|елен).*(дъск|поставка)|дъск.*трофе"), "32650", "trophy mount"),
-    (re.compile(r"(шахматен часовник|фигури за шах|пулове|зарове|аксесоар.*шах|аксесоар.*табла)"), "25613", "game pieces/accessories"),
-    (re.compile(r"(комплект|сет).*(шах|табла)|\bтабла\b|шах.*табла"), "25615", "board game"),
+    (re.compile(r"(шахматен часовник|фигури за шах|пулове|зарове|зарчета|аксесоар.*шах|аксесоар.*табла)"), "25613", "game pieces/accessories"),
+    (re.compile(r"(комплект|сет).*(шах|табла)|шах.*табла"), "25615", "board game"),
     (re.compile(r"професионален.*шах|шахмат.*професион"), "51777", "professional chess"),
     (re.compile(r"(черпак|черпало)"), "9998", "ladle"),
     (re.compile(r"(лъжиц|шпатула)"), "9999", "cooking spoon"),
@@ -87,6 +87,7 @@ KEYWORD_CATEGORY_RULES: list[tuple[re.Pattern[str], str, str]] = [
     (re.compile(r"(дъска).*(рязане|сервира|мезе|сирена)|serving board"), "54423", "serving board"),
     (re.compile(r"\bподнос|tray"), "10741", "serving tray"),
     (re.compile(r"\bплато|platter"), "10740", "platter"),
+    (re.compile(r"чини(я|и).*(пирограф|фолклор|сувенир|закач)|(?:пирограф|фолклор|сувенир).*(чини(я|и))"), "10853", "novelty/decorative plate"),
     (re.compile(r"(десертн).*(чини)|чини.*десерт"), "10807", "dessert plate"),
     (re.compile(r"\bчини(я|и)|plate"), "10808", "dinner plate"),
     (re.compile(r"(поставка|органайзер).*(нож|прибор)"), "10328", "utensil rack"),
@@ -108,9 +109,18 @@ KEYWORD_CATEGORY_RULES: list[tuple[re.Pattern[str], str, str]] = [
     (re.compile(r"(тъкан|плат|fabric|текстил)"), "39650", "fabric"),
 ]
 
+LOW_CONFIDENCE_PRODUCT_RULES: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"пепелник|ashtray", re.I), "no ashtray category exists in the supplied Temu template"),
+    (re.compile(r"възглавничк|cushion|pillow", re.I), "no cushion category exists in the supplied Temu template"),
+    (re.compile(r"фиолк.*есенц|есенц.*лавандул|fragrance vial", re.I), "no fragrance/essential-oil category exists in the supplied Temu template"),
+    (re.compile(r"лъжиц.*(?:танц|хоро)|(?:танц|хоро).*лъжиц", re.I), "folk-dance prop is not a cooking spoon"),
+]
+
 MATERIAL_TRANSLATIONS: list[tuple[re.Pattern[str], list[str]]] = [
+    (re.compile(r"\bкост\b|bone"), ["Bone"]),
     (re.compile(r"дамаск"), ["Damascus Steel", "Stainless Steel", "Steel"]),
     (re.compile(r"неръждаем"), ["Stainless Steel", "Steel"]),
+    (re.compile(r"желяз|\biron\b"), ["Iron", "Cast Iron", "Metal", "Steel"]),
     (re.compile(r"стоман"), ["High carbon steel", "Carbon Steel", "Steel", "Stainless Steel"]),
     (re.compile(r"месинг"), ["Brass", "Copper Alloy", "Metal"]),
     (re.compile(r"медн|\bмед\b"), ["Copper", "Copper Alloy", "Metal"]),
@@ -119,7 +129,7 @@ MATERIAL_TRANSLATIONS: list[tuple[re.Pattern[str], list[str]]] = [
     (re.compile(r"кож|еленов рог"), ["Leather", "Genuine", "Buckskin", "Animal Skin, Fur, And Down"]),
     (re.compile(r"керами"), ["Ceramic", "Ceramics", "Clay"]),
     (re.compile(r"стък"), ["Glass"]),
-    (re.compile(r"плат|тъкан|текстил"), ["Textile", "Cotton", "Linen", "Fabric"]),
+    (re.compile(r"\bплат\b|\bтъкан\b|текстил|вата|плюш"), ["Fabric", "Textile", "Cotton", "Linen"]),
     (re.compile(r"харт|картон"), ["Paper", "Cardboard"]),
     (re.compile(r"смол|резин"), ["Resin"]),
     (re.compile(r"бамбук"), ["Bamboo", "Wood", "Log"]),
@@ -174,6 +184,7 @@ class Product:
     price_eur: Decimal | None = None
     list_price_eur: Decimal | None = None
     in_stock: bool = True
+    stock_quantity: int | None = None
     options: list[ProductOption] = field(default_factory=list)
     category_id: str = ""
     mapping_reason: str = ""
@@ -563,7 +574,7 @@ class OreshakClient:
             product.price_source,
             product.list_price_source,
         ) = self._parse_prices(soup, json_ld)
-        product.in_stock, product.stock_source = self._parse_stock(soup, json_ld)
+        product.in_stock, product.stock_source, product.stock_quantity = self._parse_stock(soup, json_ld)
         product.options = self._parse_options(soup)
         source_text = product.description + " " + " ".join(product.attributes.values())
         product.weight_g = parse_weight(source_text)
@@ -581,10 +592,10 @@ class OreshakClient:
             product.warnings.append("Package weight will use a category fallback and must be reviewed")
         if product.dimensions_cm is None:
             product.warnings.append("Package dimensions will use a category fallback and must be reviewed")
-        if product.list_price_eur is not None and product.price_eur is not None and product.list_price_eur < product.price_eur:
-            product.list_price_eur = product.price_eur
-            product.list_price_source = "corrected to base price"
-            product.warnings.append("List price was below base price and was corrected")
+        if product.list_price_eur is not None and product.price_eur is not None and product.list_price_eur <= product.price_eur:
+            product.list_price_eur = None
+            product.list_price_source = "discarded because it was not higher than base price"
+            product.warnings.append("Published list price was not higher than base price; Temu list price set to N/A")
         return product
 
     @staticmethod
@@ -832,6 +843,22 @@ class OreshakClient:
             if src:
                 urls.append(urljoin(base_url, src))
 
+        # Current Oreshak pages use several gallery wrappers. Collect image links
+        # broadly from the main content, but reject related/product-card images.
+        excluded_ancestor = re.compile(r"related|featured|product-grid|product-thumb|carousel.*product", re.I)
+        for tag in soup.select("#content a[href]"):
+            if tag.find_parent(class_=excluded_ancestor):
+                continue
+            href = tag.get("href") or ""
+            if re.search(r"/image/(?:cache/)?catalog/.*\.(?:jpe?g|png|webp)(?:\?|$)", href, re.I):
+                urls.append(urljoin(base_url, href))
+        for tag in soup.select("#content img"):
+            if tag.find_parent(class_=excluded_ancestor) or tag.find_parent(id="tab-description"):
+                continue
+            src = tag.get("data-zoom-image") or tag.get("data-large") or tag.get("data-src") or tag.get("src")
+            if src and "/image/" in src:
+                urls.append(urljoin(base_url, src))
+
         best: dict[str, str] = {}
         order: list[str] = []
         for raw_url in urls:
@@ -858,13 +885,16 @@ class OreshakClient:
         scope = cls._main_product_scope(soup)
 
         def value_from_tag(tag: Tag) -> Decimal | None:
-            content = tag.get("content")
-            if content:
-                currency = normalize_space(tag.get("currency") or tag.get("data-currency") or "EUR").upper()
-                if currency in ("", "EUR"):
-                    value = safe_decimal(content)
-                    if value is not None:
-                        return value
+            # The live Oreshak theme exposes the actual discounted price in a hidden
+            # input, while the visible h2 can contain the crossed-out list price.
+            for attr in ("value", "content", "data-price", "data-special"):
+                raw = tag.get(attr)
+                if raw not in (None, ""):
+                    currency = normalize_space(tag.get("currency") or tag.get("data-currency") or "EUR").upper()
+                    if currency in ("", "EUR"):
+                        value = safe_decimal(raw)
+                        if value is not None:
+                            return value
             text = normalize_space(tag.get_text(" ", strip=True))
             match = re.search(r"([0-9][0-9\s.,]*)\s*€", text)
             return safe_decimal(match.group(1)) if match else None
@@ -881,11 +911,21 @@ class OreshakClient:
                         return value, f"main product selector: {selector}"
             return None, ""
 
+        # Highest priority: the add-to-cart price input used by the store itself.
         price, price_source = first_value((
-            ".price-new", ".special-price", "[itemprop='price'][content]", "meta[itemprop='price'][content]",
-            "ul.list-unstyled h2", ".product-price h2", "h2.price", ".product-price", ".price",
+            "input#price[value]", "input[name='price'][value]", ".price-new", ".special-price",
+            "[itemprop='price'][content]", "meta[itemprop='price'][content]",
         ))
         list_price, list_source = first_value((".price-old", ".old-price", "del", "s"))
+
+        # The current theme often puts the regular/list price in the visible h2.
+        visible_price, visible_source = first_value((
+            "ul.list-unstyled h2", ".product-price h2", "h2.price", ".product-price", ".price"
+        ))
+        if price is None:
+            price, price_source = visible_price, visible_source
+        elif list_price is None and visible_price is not None and visible_price > price:
+            list_price, list_source = visible_price, visible_source + " (higher than checkout price)"
 
         offers = json_ld.get("offers")
         offer_items = offers if isinstance(offers, list) else [offers] if isinstance(offers, dict) else []
@@ -900,16 +940,15 @@ class OreshakClient:
                 if value is not None:
                     price, price_source = value, "matched Product JSON-LD offer"
                     break
-        if list_price is None:
-            list_price = price
-            list_source = "same as base price; no explicit old/list price"
-        if price is not None and list_price is not None and list_price < price:
-            list_price = price
-            list_source = "same as base price; extracted list price was lower"
+        # Do not manufacture a list price. Temu supports N/A when no genuine
+        # previous/list price is published.
+        if price is not None and list_price is not None and list_price <= price:
+            list_price = None
+            list_source = "no genuine higher list price found"
         return price, list_price, price_source, list_source
 
     @classmethod
-    def _parse_stock(cls, soup: BeautifulSoup, json_ld: Mapping[str, Any]) -> tuple[bool, str]:
+    def _parse_stock(cls, soup: BeautifulSoup, json_ld: Mapping[str, Any]) -> tuple[bool, str, int | None]:
         offers = json_ld.get("offers")
         offer_items = offers if isinstance(offers, list) else [offers] if isinstance(offers, dict) else []
         for offer in offer_items:
@@ -917,24 +956,31 @@ class OreshakClient:
                 continue
             availability = str(offer.get("availability") or "").casefold()
             if "outofstock" in availability or "soldout" in availability:
-                return False, "matched Product JSON-LD availability"
+                return False, "matched Product JSON-LD availability", 0
             if "instock" in availability or "limitedavailability" in availability:
-                return True, "matched Product JSON-LD availability"
+                break
 
         scope = cls._main_product_scope(soup)
+        text = normalize_space(scope.get_text(" ", strip=True))
+        if re.search(r"последна\s+бройка|last\s+(?:item|piece)", text, re.I):
+            detected_qty = 1
+        else:
+            qty_match = re.search(r"(?:налични|в наличност|available)\s*[:\-]?\s*(\d+)\s*(?:бр|pcs|pieces)?", text, re.I)
+            detected_qty = int(qty_match.group(1)) if qty_match else None
+
         button = scope.select_one("#button-cart, button[id*='cart'], input[id*='cart']")
         if isinstance(button, Tag):
             disabled = button.has_attr("disabled") or canonical(button.get("aria-disabled")) == "true"
             button_text = normalize_space(button.get_text(" ", strip=True) or button.get("value") or "").casefold()
             if disabled or any(word in button_text for word in ("неналич", "изчерпан", "out of stock")):
-                return False, "main add-to-cart control"
-            return True, "main add-to-cart control"
+                return False, "main add-to-cart control", 0
+            return True, "main add-to-cart control", detected_qty
 
-        text = normalize_space(scope.get_text(" ", strip=True)).casefold()
+        lowered = text.casefold()
         unavailable = ("неналичен", "изчерпан", "out of stock", "не е наличен")
-        if any(marker in text for marker in unavailable):
-            return False, "main product availability text"
-        return True, "no out-of-stock marker in main product area"
+        if any(marker in lowered for marker in unavailable):
+            return False, "main product availability text", 0
+        return True, "no out-of-stock marker in main product area", detected_qty
 
     @staticmethod
     def _parse_options(soup: BeautifulSoup) -> list[ProductOption]:
@@ -963,15 +1009,31 @@ class OreshakClient:
         return options[:2]
 
 
+def _number(value: str) -> float:
+    return float(value.replace(",", "."))
+
+
+def _to_cm(value: str, unit: str | None) -> float:
+    number = _number(value)
+    normalized = canonical(unit or "cm")
+    if normalized in {"mm", "мм"}:
+        return number / 10.0
+    if normalized in {"m", "м"}:
+        return number * 100.0
+    return number
+
+
 def parse_weight(text: str) -> float | None:
+    # Repair common source typos such as "Т егло" and split words.
+    normalized = re.sub(r"т\s*е\s*г\s*л\s*о", "тегло", text, flags=re.I)
     patterns = [
-        (r"(?:тегло|weight)\s*:?\s*([0-9]+(?:[.,][0-9]+)?)\s*(кг|kg)\b", 1000),
-        (r"(?:тегло|weight)\s*:?\s*([0-9]+(?:[.,][0-9]+)?)\s*(гр|г|g)\b", 1),
+        (r"(?:тегло|weight)(?:\s+на\s+[^:;,➔]{1,60})?\s*:?[\s]*([0-9]+(?:[.,][0-9]+)?)\s*(кг|kg)\b", 1000),
+        (r"(?:тегло|weight)(?:\s+на\s+[^:;,➔]{1,60})?\s*:?[\s]*([0-9]+(?:[.,][0-9]+)?)\s*(гр|грама|г|g)\b", 1),
     ]
     for pattern, multiplier in patterns:
-        match = re.search(pattern, text, re.I)
+        match = re.search(pattern, normalized, re.I)
         if match:
-            value = float(match.group(1).replace(",", ".")) * multiplier
+            value = _number(match.group(1)) * multiplier
             return round(max(value, 0.1), 1)
     return None
 
@@ -979,28 +1041,86 @@ def parse_weight(text: str) -> float | None:
 def parse_dimensions(text: str) -> tuple[float, float, float] | None:
     normalized = text.replace(",", ".").replace("×", "x").replace("Х", "x").replace("х", "x")
     normalized = re.sub(r"(?<=\d)\s+(?=\d\s*[/x])", "", normalized)
+    # Repair source typos/split words such as "Р азмер".
+    normalized = re.sub(r"р\s+азмер", "размер", normalized, flags=re.I)
+
+    # Explicit length/width/height labels are the most reliable source.
+    l = re.search(r"дължина\s*:?\s*(\d+(?:\.\d+)?)\s*(мм|mm|см|cm|м|m)\b", normalized, re.I)
+    w = re.search(r"ширина\s*:?\s*(\d+(?:\.\d+)?)\s*(мм|mm|см|cm|м|m)\b", normalized, re.I)
+    h = re.search(r"височина\s*:?\s*(\d+(?:\.\d+)?)\s*(мм|mm|см|cm|м|m)\b", normalized, re.I)
+    if l and w and h:
+        vals = (_to_cm(l.group(1), l.group(2)), _to_cm(w.group(1), w.group(2)), _to_cm(h.group(1), h.group(2)))
+        return tuple(round(v, 2) for v in sorted(vals, reverse=True))
+
+    # Some pages state values as "27 см. височина / 16 см. ширина / 5 см. дебелина".
+    labelled: dict[str, float] = {}
+    for value, unit, label in re.findall(
+        r"(\d+(?:\.\d+)?)\s*(мм|mm|см|cm|м|m)[.\s]*(височина|ширина|дебелина|дължина)",
+        normalized,
+        re.I,
+    ):
+        labelled[canonical(label)] = _to_cm(value, unit)
+    if {"височина", "ширина", "дебелина"}.issubset(labelled):
+        vals = [labelled["височина"], labelled["ширина"], labelled["дебелина"]]
+        return tuple(round(v, 2) for v in sorted(vals, reverse=True))
+
     thickness_match = re.search(
-        r"дебелина(?:\s+на\s+[^:;,➔]{1,50})?\s*:?\s*(\d+(?:\.\d+)?)\s*см",
+        r"дебелина(?:\s+на\s+[^:;,➔]{1,50})?\s*:?\s*(\d+(?:\.\d+)?)\s*(мм|mm|см|cm|м|m)",
         normalized,
         re.I,
     )
-    thickness = float(thickness_match.group(1)) if thickness_match else None
-    patterns = [
-        r"(?:размер(?:и)?(?:\s+на\s+[^:;,➔]{1,50})?|dimensions?)\s*:?\s*(\d+(?:\.\d+)?)\s*[x/]\s*(\d+(?:\.\d+)?)(?:\s*[x/]\s*(\d+(?:\.\d+)?))?\s*см",
-        r"(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)(?:\s*x\s*(\d+(?:\.\d+)?))?\s*см",
+    thickness = _to_cm(thickness_match.group(1), thickness_match.group(2)) if thickness_match else None
+    height_match = re.search(
+        r"височина(?:\s+на\s+[^:;,➔]{1,50})?\s*:?\s*(\d+(?:\.\d+)?)\s*(мм|mm|см|cm|м|m)",
+        normalized,
+        re.I,
+    )
+    explicit_height = _to_cm(height_match.group(1), height_match.group(2)) if height_match else None
+
+    # Prefer outer/closed/frame dimensions. Keep the text between the label and
+    # the first number short so the regex cannot drift into a later "inner size".
+    priority_patterns = [
+        r"външни\s+размери[^0-9]{0,60}?(\d+(?:\.\d+)?)\s*[/x]\s*(\d+(?:\.\d+)?)(?:\s*[/x]\s*(\d+(?:\.\d+)?))?\s*(мм|mm|см|cm|м|m)",
+        r"(?:размери?\s+)?(?:на\s+кутията\s*)?(?:в\s+)?затворено\s+състояние[^0-9]{0,40}?(\d+(?:\.\d+)?)\s*[/x]\s*(\d+(?:\.\d+)?)(?:\s*[/x]\s*(\d+(?:\.\d+)?))?\s*(мм|mm|см|cm|м|m)",
+        r"кутия\s*:\s*в\s+затворено\s+състояние[^0-9]{0,40}?(\d+(?:\.\d+)?)\s*[/x]\s*(\d+(?:\.\d+)?)(?:\s*[/x]\s*(\d+(?:\.\d+)?))?\s*(мм|mm|см|cm|м|m)",
+        r"размер\s+с\s+рамката[^0-9]{0,40}?(\d+(?:\.\d+)?)\s*[/x]\s*(\d+(?:\.\d+)?)(?:\s*[/x]\s*(\d+(?:\.\d+)?))?\s*(мм|mm|см|cm|м|m)",
+        r"(?:размер(?:и)?(?:\s+на\s+(?!едно отделение|квадратите|платно)[^:;,➔]{1,50})?|dimensions?)\s*:?\s*(\d+(?:\.\d+)?)\s*[/x]\s*(\d+(?:\.\d+)?)(?:\s*[/x]\s*(\d+(?:\.\d+)?))?\s*(мм|mm|см|cm|м|m)",
     ]
-    for pattern in patterns:
+    for pattern in priority_patterns:
         match = re.search(pattern, normalized, re.I)
-        if match:
-            dims = [float(v) for v in match.groups() if v]
-            if len(dims) == 2:
-                dims.append(thickness if thickness is not None else 3.0)
-            ordered = sorted((max(v, 0.1) for v in dims), reverse=True)
-            return round(ordered[0], 1), round(ordered[1], 1), round(ordered[2], 1)
-    diameter = re.search(r"(?:диаметър|ф|Ø)\s*:?\s*(\d+(?:\.\d+)?)\s*см?", normalized, re.I)
+        if not match:
+            continue
+        a, b, c, unit = match.groups()
+        dims = [_to_cm(a, unit), _to_cm(b, unit)]
+        if c:
+            dims.append(_to_cm(c, unit))
+        else:
+            inferred = thickness or explicit_height
+            # Tiny square dice/game pieces are cubes.
+            if inferred is None and max(dims) <= 1.5 and abs(dims[0] - dims[1]) <= 0.05:
+                inferred = dims[0]
+            if inferred is None:
+                inferred = max(0.5, min(dims) * 0.15)
+            dims.append(inferred)
+        return tuple(round(v, 2) for v in sorted((max(v, 0.1) for v in dims), reverse=True))
+
+    # One overall size plus a height (common for round/square trays and ashtrays).
+    single_size = re.search(r"размер(?:и)?\s*:?\s*(\d+(?:\.\d+)?)\s*(мм|mm|см|cm|м|m)", normalized, re.I)
+    if single_size and explicit_height:
+        side = _to_cm(single_size.group(1), single_size.group(2))
+        return tuple(round(v, 2) for v in sorted((side, side, explicit_height), reverse=True))
+
+    diameter = re.search(r"(?:диаметър|ф|Ø)\s*:?\s*(\d+(?:\.\d+)?)\s*(мм|mm|см|cm|м|m)?", normalized, re.I)
     if diameter:
-        d = float(diameter.group(1))
-        return round(d, 1), round(d, 1), round(thickness if thickness is not None else 5.0, 1)
+        d = _to_cm(diameter.group(1), diameter.group(2))
+        return round(d, 2), round(d, 2), round(thickness or explicit_height or max(0.5, d * 0.15), 2)
+
+    # Tall narrow objects sometimes publish height and opening only.
+    opening = re.search(r"отвор\s*:?\s*(\d+(?:\.\d+)?)\s*(мм|mm|см|cm|м|m)", normalized, re.I)
+    if explicit_height and opening:
+        d = _to_cm(opening.group(1), opening.group(2))
+        return tuple(round(v, 2) for v in sorted((explicit_height, d, d), reverse=True))
+
     blade = re.search(r"дължина на острието\s*:?\s*(\d+(?:\.\d+)?)\s*см", normalized, re.I)
     handle = re.search(r"дължина на дръжката\s*:?\s*(\d+(?:\.\d+)?)\s*см", normalized, re.I)
     total = re.search(r"обща дължина\s*:?\s*(\d+(?:\.\d+)?)\s*см", normalized, re.I)
@@ -1033,15 +1153,30 @@ def choose_valid(values: Sequence[str], candidates: Sequence[str], fallback_firs
 
 
 def detect_material_candidates(product: Product, food_contact: bool = False) -> list[str]:
-    text = " ".join([product.title, product.description, *product.attributes.values()]).casefold()
+    published = " ".join(re.findall(r"материал\s*:\s*([^,.;➔]{1,80})", product.description, re.I))
+    structured = normalize_space(" ".join([
+        published,
+        product.attributes.get("Материал", ""),
+        product.attributes.get("Дърво", ""),
+    ])).casefold()
+    full_text = normalize_space(" ".join([product.title, product.description, *product.attributes.values()])).casefold()
     candidates: list[str] = []
-    for pattern, values in MATERIAL_TRANSLATIONS:
-        if pattern.search(text):
-            candidates.extend(values)
+
+    # Explicit "Материал:" text and structured source attributes take priority
+    # over incidental component words (for example a brass latch on a wooden box).
+    for source in (structured, full_text):
+        for pattern, values in MATERIAL_TRANSLATIONS:
+            if pattern.search(source):
+                candidates.extend(values)
+        if candidates and source == structured:
+            break
     if not candidates:
-        candidates = ["Wood", "Log"] if "дър" in text else ["Other", "Metal"]
+        candidates = ["Wood", "Log"] if "дър" in full_text else ["Other", "Metal"]
     if food_contact and any(canonical(v) in {"wood", "solidwood", "naturalwood"} for v in candidates):
         candidates = ["Log", "Wood", *candidates]
+    # "Other" is a safer valid dropdown fallback when the exact published
+    # material (for example bone) is not offered by Temu.
+    candidates.append("Other")
     return dedupe(candidates)
 
 
@@ -1050,7 +1185,14 @@ def category_for(product: Product, overrides: Mapping[str, str], schema: Templat
         return overrides[product.code], "override by product code", "high"
     if product.url in overrides:
         return overrides[product.url], "override by product URL", "high"
-    haystack = normalize_space(" ".join([product.title, product.description[:500], product.source_category_name])).casefold()
+    # Category detection must be driven by the product identity, not generic words such as
+    # "gift" or "wood" appearing later in the description.
+    haystack = normalize_space(" ".join([product.title, product.source_category_name])).casefold()
+    title_only = product.title.casefold()
+    for pattern, reason in LOW_CONFIDENCE_PRODUCT_RULES:
+        if pattern.search(title_only):
+            default = SOURCE_DEFAULTS.get(slug_key(product.source_category_url), "13020")
+            return default, reason, "low"
     for pattern, category_id, reason in KEYWORD_CATEGORY_RULES:
         if pattern.search(haystack) and category_id in schema.category_names:
             return category_id, reason, "high"
@@ -1115,6 +1257,74 @@ def variation_fields(variant: Variant, schema: TemplateSchema) -> dict[str, Any]
     return row
 
 
+FABRIC_COMPOSITION_COLUMNS: dict[str, tuple[str, ...]] = {
+    "IA": ("акрил", "acrylic"),
+    "IB": ("памук", "cotton"),
+    "IC": ("лен", "linen"),
+    "ID": ("modal", "модал"),
+    "IE": ("найлон", "nylon", "полиамид"),
+    "IF": ("полиестер", "polyester"),
+    "IG": ("коприна", "silk"),
+    "IH": ("еластан", "elastane", "spandex"),
+    "II": ("вискоза", "viscose"),
+    "IJ": ("ацетат", "acetate"),
+    "IK": ("лиосел", "lyocell"),
+    "IM": ("полиуретан", "polyurethane"),
+    "IN": ("полипропилен", "polypropylene"),
+    "MG": ("кашмир", "cashmere"),
+    "MH": ("пера", "feather"),
+    "MI": ("мохер", "mohair"),
+    "MJ": ("вълна", "wool"),
+    "MK": ("алпака", "alpaca"),
+    "ML": ("пух", "down"),
+    "MM": ("патешки пух", "duck down"),
+    "MN": ("заешки косъм", "rabbit hair"),
+    "MO": ("pvc", "пвц"),
+    "MP": ("гъши пух", "goose down"),
+    "MQ": ("кожа", "leather"),
+    "MR": ("изкуствен косъм", "faux fur"),
+    "MS": ("изкуствена кожа", "faux leather"),
+    "MU": ("полиетилен", "polyethylene"),
+    "MV": ("корк", "cork"),
+}
+
+
+def fabric_composition_fields(product: Product, schema: TemplateSchema) -> dict[str, Any]:
+    if product.category_id != "39650":
+        return {}
+    text = normalize_space(" ".join([product.title, product.description, *product.attributes.values()])).casefold()
+    row: dict[str, Any] = {column: 0 for column in FABRIC_COMPOSITION_COLUMNS}
+    row["IL"] = 0  # Other Fibers
+    row["MT"] = 0  # Non-textile Materials
+
+    explicit: list[tuple[str, float]] = []
+    for column, names in FABRIC_COMPOSITION_COLUMNS.items():
+        for name in names:
+            match = re.search(rf"(\d+(?:[.,]\d+)?)\s*%\s*{re.escape(name)}", text, re.I)
+            if not match:
+                match = re.search(rf"{re.escape(name)}\s*[:\-]?\s*(\d+(?:[.,]\d+)?)\s*%", text, re.I)
+            if match:
+                explicit.append((column, float(match.group(1).replace(",", "."))))
+                break
+    if explicit:
+        for column, percent in explicit:
+            row[column] = percent
+    else:
+        detected = next((column for column, names in FABRIC_COMPOSITION_COLUMNS.items() if any(name in text for name in names)), None)
+        if detected:
+            row[detected] = 100
+            product.warnings.append("Fabric composition percentage inferred as 100% from the published material")
+        else:
+            row["IL"] = 100
+            product.warnings.append("Fabric composition was not published; set to 100% Other Fibers for review")
+
+    total = sum(float(row.get(column, 0) or 0) for column in [*FABRIC_COMPOSITION_COLUMNS, "IL", "MT"])
+    if total and abs(total - 100) > 0.01:
+        product.warnings.append(f"Published fabric composition totals {total:g}% and must be reviewed")
+    row["MY"] = choose_valid(schema.dropdown_for("MY", product.category_id, row), ["Textile Material"])
+    return row
+
+
 def infer_required_value(column: str, product: Product, variant: Variant, row: dict[str, Any], schema: TemplateSchema, config: Mapping[str, Any]) -> Any:
     category_id = product.category_id
     header = schema.headers.get(column, "")
@@ -1131,10 +1341,11 @@ def infer_required_value(column: str, product: Product, variant: Variant, row: d
     if column == "O": return choose_valid(dropdown, ["Add", "Add a new product", "New"])
     if column == "T": return product.description[:2000]
     if column == "PT": return variant.image
-    if column == "QE": return int(config.get("default_in_stock_quantity", 10)) if product.in_stock else 0
+    if column == "QE": return (product.stock_quantity if product.stock_quantity is not None else int(config.get("default_in_stock_quantity", 10))) if product.in_stock else 0
     if column == "QF": return product.price_eur
     if column == "QG": return product.url
-    if column == "QH": return product.list_price_eur or product.price_eur
+    if column == "QH": return product.list_price_eur
+    if column == "QI": return "N/A" if product.list_price_eur is None else ""
     if column == "QJ": return round(weight, 1)
     if column == "QK": return round(max(dims), 1)
     if column == "QL": return round(sorted(dims, reverse=True)[1], 1)
@@ -1153,8 +1364,10 @@ def infer_required_value(column: str, product: Product, variant: Variant, row: d
     if column == "TF": return normalize_space(config.get("eu_responsible_person"))
     if column == "PF": return variation_fields(variant, schema).get("PF")
 
+    if "Material Type" in header:
+        return choose_valid(dropdown, ["Textile Material", "Non-textile Material"], fallback_first=False)
     if column in {"DS", "DT", "DU", "FO", "FP", "FQ"} or "Material" in header:
-        return choose_valid(dropdown, detect_material_candidates(product, food_contact="Food Contact" in header))
+        return choose_valid(dropdown, detect_material_candidates(product, food_contact="Food Contact" in header), fallback_first=False)
     if "Power Supply" in header:
         return choose_valid(dropdown, ["Use Without Electricity", "Without Electricity", "Non Electric"])
     if "Battery Properties" in header:
@@ -1166,23 +1379,26 @@ def infer_required_value(column: str, product: Product, variant: Variant, row: d
         food = category_id in {"9998", "9999", "10006", "10059", "10072", "10638", "10628", "54423", "10740", "10741", "10807", "10808", "10853", "11514", "10905", "10888", "10875", "9923"}
         return choose_valid(dropdown, ["Yes" if food else "No"])
     if "Food Contact Material" in header:
-        return choose_valid(dropdown, detect_material_candidates(product, food_contact=True))
+        return choose_valid(dropdown, detect_material_candidates(product, food_contact=True), fallback_first=False)
     if "Closure Type" in header:
         return choose_valid(dropdown, ["Magnetic" if "магнит" in text else "Latch", "Flip top"])
     if "Water Resistance Level" in header:
         return choose_valid(dropdown, ["Non-water resistant"])
+    if "Frame Type" in header:
+        framed = "рамк" in text or "frame" in text
+        return choose_valid(dropdown, ["Framed", "With Frame"] if framed else ["Frameless"], fallback_first=False)
     if "Thickness" in header and "value" in schema.internal_keys.get(column, "").casefold():
         return round(min(dims), 1)
     if "Thickness" in header and "unit" in schema.internal_keys.get(column, "").casefold():
         return choose_valid(dropdown, ["cm"])
     if "Wood Type" in header:
-        return choose_valid(dropdown, ["Solid Wood", "Natural Wood", "Wood"])
+        return choose_valid(dropdown, ["Solid Wood", "Natural Wood", "Wood"], fallback_first=False)
     if "Wood Species" in header:
         species_candidates: list[str] = []
         for bg, candidates in WOOD_SPECIES.items():
             if bg in text:
                 species_candidates.extend(candidates)
-        return choose_valid(dropdown, species_candidates or ["Beech", "Walnut", "Oak"])
+        return choose_valid(dropdown, species_candidates, fallback_first=False)
     if "Stainless Steel Grade" in header:
         return choose_valid(dropdown, ["304", "18/10", "Other"])
     if "Genuine Leather Type" in header:
@@ -1190,7 +1406,7 @@ def infer_required_value(column: str, product: Product, variant: Variant, row: d
     if "Packaging unit" in header:
         return choose_valid(dropdown, ["piece"])
     if dropdown:
-        return choose_valid(dropdown, ["Other", "No", "None", "Not Applicable", "Use Without Electricity"])
+        return choose_valid(dropdown, ["Other", "No", "None", "Not Applicable", "Use Without Electricity"], fallback_first=False)
     # Free-text/numeric fallback. It is preferable to provide a traceable SKU
     # rather than leave a Temu-required cell empty.
     if any(token in header.casefold() for token in ("quantity", "number", "count")):
@@ -1200,18 +1416,51 @@ def infer_required_value(column: str, product: Product, variant: Variant, row: d
     return "Not Applicable"
 
 
+def prices_for_upload(product: Product, config: Mapping[str, Any]) -> tuple[Decimal | None, Decimal | None, str]:
+    """Return the Temu selling price, Temu list price and a traceable basis.
+
+    Oreshak may publish both a discounted checkout price and a higher regular
+    price. When ``use_pre_promotion_price`` is enabled, the higher genuine
+    pre-promotion price becomes the Temu selling price. In that mode no
+    separate Temu list price is sent, because the uploaded selling price is
+    already the regular price before the promotion.
+    """
+    multiplier = safe_decimal(config.get("price_multiplier", 1)) or Decimal("1")
+    use_pre_promotion = bool(config.get("use_pre_promotion_price", True))
+
+    source_value = product.price_eur
+    basis = product.price_source or "current product price"
+    if (
+        use_pre_promotion
+        and product.list_price_eur is not None
+        and (product.price_eur is None or product.list_price_eur > product.price_eur)
+    ):
+        source_value = product.list_price_eur
+        basis = product.list_price_source or "published pre-promotion price"
+
+    price_eur = (
+        (source_value * multiplier).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        if source_value is not None else None
+    )
+    list_price_eur = None
+    if not use_pre_promotion and product.list_price_eur is not None:
+        list_price_eur = (product.list_price_eur * multiplier).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+    return price_eur, list_price_eur, basis
+
+
 def build_row(variant: Variant, schema: TemplateSchema, config: Mapping[str, Any]) -> tuple[dict[str, Any], list[str], list[str]]:
     product = variant.product
-    multiplier = safe_decimal(config.get("price_multiplier", 1)) or Decimal("1")
-    price_eur = (product.price_eur * multiplier).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) if product.price_eur is not None else None
-    list_price_eur = (product.list_price_eur * multiplier).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) if product.list_price_eur is not None else None
+    price_eur, list_price_eur, _ = prices_for_upload(product, config)
 
     row: dict[str, Any] = {
         "E": product.category_id,
         "L": variant.title[:500], "M": product.code[:80], "N": variant.sku[:80],
         "T": product.description[:2000],
-        "QE": int(config.get("default_in_stock_quantity", 10)) if product.in_stock else 0,
-        "QF": price_eur, "QG": product.url, "QH": list_price_eur or price_eur,
+        "QE": (product.stock_quantity if product.stock_quantity is not None else int(config.get("default_in_stock_quantity", 10))) if product.in_stock else 0,
+        "QF": price_eur, "QG": product.url, "QH": list_price_eur,
+        "QI": "N/A" if list_price_eur is None else "",
         "QY": normalize_space(config.get("shipping_template")) or choose_valid(schema.dropdown_for("QY", product.category_id, {}), []),
         "QZ": normalize_space(config.get("handling_time")) or "1 Day",
         "RA": normalize_space(config.get("fulfillment_channel")) or choose_valid(schema.dropdown_for("RA", product.category_id, {}), ["Seller Fulfilled", "Seller"]),
@@ -1222,6 +1471,7 @@ def build_row(variant: Variant, schema: TemplateSchema, config: Mapping[str, Any
         "TF": normalize_space(config.get("eu_responsible_person")),
     }
     row.update(variation_fields(variant, schema))
+    row.update(fabric_composition_fields(product, schema))
     for i, bullet in enumerate(product.bullet_points[:6]):
         row[col_letter(col_number("U") + i)] = bullet[:700]
     detail_limit = min(int(config.get("max_detail_images", 10)), 50)
@@ -1242,9 +1492,11 @@ def build_row(variant: Variant, schema: TemplateSchema, config: Mapping[str, Any
     required = schema.required_columns(product.category_id)
     # Data Definitions additionally marks these offer fields required even when
     # the category-mode helper sheet does not list them.
-    required.update({"E", "L", "M", "N", "PF", "PT", "QE", "QF", "QH", "QJ", "QK", "QL", "QM", "QY", "QZ", "RA", "RC", "TD", "TE", "TF"})
+    required.update({"E", "L", "M", "N", "PF", "PT", "QE", "QF", "QJ", "QK", "QL", "QM", "QY", "QZ", "RA", "RC", "TD", "TE", "TF"})
     review_notes: list[str] = []
     for column in sorted(required, key=col_number):
+        if column == "QH" and canonical(row.get("QI")) == canonical("N/A"):
+            continue
         if row.get(column) in (None, ""):
             inferred = infer_required_value(column, product, variant, row, schema, config)
             row[column] = inferred
@@ -1282,6 +1534,8 @@ def build_row(variant: Variant, schema: TemplateSchema, config: Mapping[str, Any
 
     errors: list[str] = []
     for column in sorted(required, key=col_number):
+        if column == "QH" and canonical(row.get("QI")) == canonical("N/A"):
+            continue
         if row.get(column) in (None, ""):
             errors.append(f"Missing required {column} ({schema.headers.get(column, '')})")
     if not product.images:
@@ -1290,6 +1544,8 @@ def build_row(variant: Variant, schema: TemplateSchema, config: Mapping[str, Any
         errors.append("No EUR price")
     if product.category_id not in schema.category_names:
         errors.append(f"Unknown Temu category {product.category_id}")
+    if product.mapping_confidence == "low":
+        errors.append(f"No safe Temu category mapping: {product.mapping_reason}; add category_overrides.csv entry")
     return row, errors, dedupe(review_notes)
 
 
@@ -1379,14 +1635,17 @@ def write_csv(path: Path, fieldnames: Sequence[str], rows: Iterable[Mapping[str,
             writer.writerow(row)
 
 
-def raw_product_row(product: Product) -> dict[str, Any]:
+def raw_product_row(product: Product, config: Mapping[str, Any]) -> dict[str, Any]:
+    upload_price_eur, upload_list_price_eur, upload_price_basis = prices_for_upload(product, config)
     return {
         "product_code": product.code, "product_name": product.title, "source_category": product.source_category_name,
         "temu_category_id": product.category_id, "temu_mapping_reason": product.mapping_reason,
         "mapping_confidence": product.mapping_confidence, "description": product.description,
         "price_eur": product.price_eur, "list_price_eur": product.list_price_eur,
         "price_source": product.price_source, "list_price_source": product.list_price_source,
-        "availability": "in_stock" if product.in_stock else "out_of_stock", "stock_source": product.stock_source,
+        "upload_price_eur": upload_price_eur, "upload_list_price_eur": upload_list_price_eur,
+        "upload_price_basis": upload_price_basis,
+        "availability": "in_stock" if product.in_stock else "out_of_stock", "stock_source": product.stock_source, "stock_quantity": product.stock_quantity,
         "weight_g": product.weight_g, "weight_source": product.weight_source,
         "length_cm": product.dimensions_cm[0] if product.dimensions_cm else "",
         "width_cm": product.dimensions_cm[1] if product.dimensions_cm else "",
@@ -1465,6 +1724,8 @@ def main() -> int:
             try:
                 product = client.parse_product(url, category_url)
                 product.category_id, product.mapping_reason, product.mapping_confidence = category_for(product, overrides, schema)
+                if product.mapping_confidence != "high":
+                    product.warnings.append(f"Category mapping {product.mapping_confidence}: {product.mapping_reason}")
                 if product.category_id not in schema.category_names:
                     raise ValueError(f"Mapped category {product.category_id} is not in the template")
                 products.append(product)
@@ -1512,10 +1773,11 @@ def main() -> int:
         raw_fields = [
             "product_code", "product_name", "source_category", "temu_category_id", "temu_mapping_reason",
             "mapping_confidence", "description", "price_eur", "list_price_eur", "price_source", "list_price_source",
-            "availability", "stock_source", "weight_g", "weight_source", "length_cm", "width_cm", "height_cm",
+            "upload_price_eur", "upload_list_price_eur", "upload_price_basis",
+            "availability", "stock_source", "stock_quantity", "weight_g", "weight_source", "length_cm", "width_cm", "height_cm",
             "dimensions_source", "product_url", "images", "attributes_json", "options_json", "warnings",
         ]
-        write_csv(output_dir / "oreshak_raw_export.csv", raw_fields, (raw_product_row(p) for p in products))
+        write_csv(output_dir / "oreshak_raw_export.csv", raw_fields, (raw_product_row(p, config) for p in products))
         write_csv(output_dir / "category_mapping_review.csv", [
             "product_code", "product_name", "product_url", "source_category", "temu_category_id",
             "temu_category_name", "mapping_reason", "mapping_confidence",

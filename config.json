@@ -27,7 +27,7 @@
   "handling_time": "1 Day",
   "fulfillment_channel": "",
   "item_tax_code": "GEN STANDARD",
-  "default_in_stock_quantity": 10,
+  "default_in_stock_quantity": 1,
   "include_out_of_stock": false,
   "request_delay_seconds": 1.2,
   "request_timeout_seconds": 35,
@@ -35,5 +35,6 @@
   "price_multiplier": 1.0,
   "max_detail_images": 10,
   "max_sku_images": 10,
-  "category_overrides_file": "category_overrides.csv"
+  "category_overrides_file": "category_overrides.csv",
+  "use_pre_promotion_price": true
 }
