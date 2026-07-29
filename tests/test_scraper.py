@@ -6,6 +6,9 @@ import scraper
 
 
 class ParserTests(unittest.TestCase):
+    def test_project_version_matches_bundle(self):
+        self.assertEqual(scraper.PROJECT_VERSION, "6.1")
+
     def test_price_is_taken_from_main_product_not_related_cards(self):
         html = '''
         <div id="content">
@@ -257,8 +260,12 @@ class ParserTests(unittest.TestCase):
     def test_two_dimensional_size_does_not_invent_thickness(self):
         self.assertIsNone(scraper.parse_dimensions("Размери: 40/40 см. Материал: 100% акрил."))
 
-    def test_depth_is_used_as_third_dimension(self):
+    def test_internal_depth_is_not_used_as_outer_dimension(self):
         text = "Размери: 40/11 см. Вътрешна дълбочина: 7 см."
+        self.assertIsNone(scraper.parse_dimensions(text))
+
+    def test_external_depth_can_complete_two_dimensions(self):
+        text = "Размери: 40/11 см. Дълбочина: 7 см."
         self.assertEqual(scraper.parse_dimensions(text), (40.0, 11.0, 7.0))
 
     def test_two_equal_tiny_dimensions_are_still_treated_as_cube(self):
@@ -294,6 +301,67 @@ class ParserTests(unittest.TestCase):
         variant = scraper.Variant(product=product, option_values={}, sku="1", title="ПАНО", image="x")
         value = scraper.infer_required_value("EK", product, variant, {}, FakeSchema(), {})
         self.assertEqual(value, "Log")
+
+    def test_product_title_beats_source_category_words(self):
+        class FakeSchema:
+            category_names = {"10888": "Kegs & Kegging", "10905": "Barrels", "13020": "Collectible Figurines"}
+
+        product = scraper.Product(
+            url="https://oreshak.bg/flask",
+            source_category_url="https://oreshak.bg/baklitsi-i-bureta",
+            source_category_name="БЪКЛИЦИ И БУРЕТА",
+            title="ДЪРВОРЕЗБОВАНА БЪКЛИЦА 200 МЛ",
+        )
+        _, reason, confidence = scraper.category_for(product, {}, FakeSchema())
+        self.assertEqual(confidence, "low")
+        self.assertIn("flask", reason)
+
+    def test_tablecloth_is_not_mapped_to_raw_fabric(self):
+        class FakeSchema:
+            category_names = {"39650": "Fabric", "13020": "Collectible Figurines"}
+
+        product = scraper.Product(
+            url="https://oreshak.bg/tablecloth",
+            source_category_url="https://oreshak.bg/bitova-takan",
+            source_category_name="БИТОВА ТЪКАН",
+            title="БИТОВА ПОКРИВКА 40/40",
+        )
+        _, reason, confidence = scraper.category_for(product, {}, FakeSchema())
+        self.assertEqual(confidence, "low")
+        self.assertIn("not raw Fabric", reason)
+
+    def test_salt_cellar_maps_to_serveware_accessory(self):
+        class FakeSchema:
+            category_names = {"10703": "Serveware Accessories", "9923": "Tool & Gadget Sets", "13020": "Collectible Figurines"}
+
+        product = scraper.Product(
+            url="https://oreshak.bg/salt",
+            source_category_url="https://oreshak.bg/kuhnenski-aksesoari-ot-darvo-Oreshak",
+            source_category_name="КУХНЕНСКИ АКСЕСОАРИ ОТ ДЪРВО",
+            title="ЕДИНИЧНА ДЪРВЕНА СОЛНИЦА С КАПАК",
+        )
+        category_id, _, confidence = scraper.category_for(product, {}, FakeSchema())
+        self.assertEqual(category_id, "10703")
+        self.assertEqual(confidence, "high")
+
+    def test_decorative_novelty_plate_is_not_assumed_food_safe(self):
+        class FakeSchema:
+            headers = {"FH": "4010 - Can Be Used For Food Contact"}
+            internal_keys = {"FH": "t_3_Can Be Used For Food Contact"}
+            @staticmethod
+            def dropdown_for(column, category_id, row):
+                return ["Yes", "No"]
+
+        product = scraper.Product(
+            url="https://oreshak.bg/plate",
+            source_category_url="https://oreshak.bg/ruchno-izraboteni-chinii-ot-darvo",
+            title="ДЪРВЕНА ЧИНИЯ ПИРОГРАФИЯ С ФОЛКЛОРНИ МОТИВИ",
+            description="Декоративна чиния за подарък и окачване на стена.",
+            category_id="10853",
+        )
+        variant = scraper.Variant(product=product, option_values={}, sku="1", title=product.title, image="x")
+        value = scraper.infer_required_value("FH", product, variant, {}, FakeSchema(), {})
+        self.assertEqual(value, "No")
 
 
 if __name__ == "__main__":
