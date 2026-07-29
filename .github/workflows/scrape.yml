@@ -3,10 +3,14 @@ name: Oreshak to Temu scraper
 on:
   workflow_dispatch:
     inputs:
-      limit:
-        description: "Maximum source products; 0 means all"
+      run_mode:
+        description: "Test = 1 product per category; Full = all products"
         required: true
-        default: "10"
+        type: choice
+        options:
+          - test
+          - full
+        default: test
       category:
         description: "Optional URL slug filter, e.g. nojove-ot-balgaria"
         required: false
@@ -24,16 +28,23 @@ jobs:
           cache: "pip"
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
+      - name: Run parser tests
+        run: python -m unittest discover -s tests -v
       - name: Validate template
         run: python scraper.py --schema-only
       - name: Run scraper
         shell: bash
         run: |
-          if [ -n "${{ inputs.category }}" ]; then
-            python scraper.py --limit "${{ inputs.limit }}" --category "${{ inputs.category }}"
+          EXTRA_ARGS=()
+          if [ "${{ inputs.run_mode }}" = "test" ]; then
+            EXTRA_ARGS+=(--limit 0 --limit-per-category 1)
           else
-            python scraper.py --limit "${{ inputs.limit }}"
+            EXTRA_ARGS+=(--limit 0)
           fi
+          if [ -n "${{ inputs.category }}" ]; then
+            EXTRA_ARGS+=(--category "${{ inputs.category }}")
+          fi
+          python scraper.py "${EXTRA_ARGS[@]}"
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
