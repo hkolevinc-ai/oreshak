@@ -28,7 +28,7 @@
   "fulfillment_channel": "",
   "item_tax_code": "GEN STANDARD",
   "default_in_stock_quantity": 10,
-  "include_out_of_stock": true,
+  "include_out_of_stock": false,
   "request_delay_seconds": 1.2,
   "request_timeout_seconds": 35,
   "max_retries": 5,

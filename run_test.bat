@@ -1,5 +1,6 @@
 @echo off
 cd /d "%~dp0"
 py -m pip install -r requirements.txt
-py scraper.py --template template.xlsx --config config.json --limit 10
+py -m unittest discover -s tests -v
+py scraper.py --template template.xlsx --config config.json --limit 0 --limit-per-category 1
 pause

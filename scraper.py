@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, Sequence
-from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urljoin, urlparse, urlunparse
 from zipfile import ZIP_DEFLATED, ZipFile
 
 try:
@@ -180,6 +180,11 @@ class Product:
     mapping_confidence: str = "medium"
     weight_g: float | None = None
     dimensions_cm: tuple[float, float, float] | None = None
+    price_source: str = ""
+    list_price_source: str = ""
+    stock_source: str = ""
+    weight_source: str = ""
+    dimensions_source: str = ""
     warnings: list[str] = field(default_factory=list)
 
 @dataclass
@@ -539,10 +544,10 @@ class OreshakClient:
         html = self.get(url)
         soup = BeautifulSoup(html, "lxml")
         product = Product(url=url, source_category_url=category_url)
-        json_ld = self._json_ld_product(soup)
-        product.title = normalize_space(
-            self._first_text(soup, ["#content h1", "h1", ".product-info h1"]) or json_ld.get("name")
-        )
+        product.title = normalize_space(self._first_text(soup, ["#content h1", "h1", ".product-info h1"]))
+        json_ld = self._json_ld_product(soup, page_url=url, title_hint=product.title)
+        if not product.title:
+            product.title = normalize_space(str(json_ld.get("name") or ""))
         if not product.title:
             raise ValueError("Product title not found")
         product.code = self._parse_code(soup, html, url)
@@ -552,11 +557,19 @@ class OreshakClient:
         product.bullet_points = self._make_bullets(product)
         product.tags = self._parse_tags(soup)
         product.images = self._parse_images(soup, json_ld, url)
-        product.price_eur, product.list_price_eur = self._parse_prices(soup, json_ld)
-        product.in_stock = self._parse_stock(soup)
+        (
+            product.price_eur,
+            product.list_price_eur,
+            product.price_source,
+            product.list_price_source,
+        ) = self._parse_prices(soup, json_ld)
+        product.in_stock, product.stock_source = self._parse_stock(soup, json_ld)
         product.options = self._parse_options(soup)
-        product.weight_g = parse_weight(product.description + " " + " ".join(product.attributes.values()))
-        product.dimensions_cm = parse_dimensions(product.description + " " + " ".join(product.attributes.values()))
+        source_text = product.description + " " + " ".join(product.attributes.values())
+        product.weight_g = parse_weight(source_text)
+        product.dimensions_cm = parse_dimensions(source_text)
+        product.weight_source = "product description/attributes" if product.weight_g is not None else "category fallback"
+        product.dimensions_source = "product description/attributes" if product.dimensions_cm is not None else "category fallback"
         if not product.code:
             product.code = self._generated_code(url, product.title)
             product.warnings.append("Product code was generated from URL/title")
@@ -564,24 +577,65 @@ class OreshakClient:
             product.warnings.append("No product gallery image found")
         if product.price_eur is None:
             product.warnings.append("EUR price not found")
+        if product.weight_g is None:
+            product.warnings.append("Package weight will use a category fallback and must be reviewed")
+        if product.dimensions_cm is None:
+            product.warnings.append("Package dimensions will use a category fallback and must be reviewed")
+        if product.list_price_eur is not None and product.price_eur is not None and product.list_price_eur < product.price_eur:
+            product.list_price_eur = product.price_eur
+            product.list_price_source = "corrected to base price"
+            product.warnings.append("List price was below base price and was corrected")
         return product
 
     @staticmethod
-    def _json_ld_product(soup: BeautifulSoup) -> dict[str, Any]:
+    def _json_ld_product(soup: BeautifulSoup, page_url: str = "", title_hint: str = "") -> dict[str, Any]:
+        candidates: list[dict[str, Any]] = []
         for script in soup.select('script[type="application/ld+json"]'):
             try:
                 data = json.loads(script.string or script.get_text())
             except Exception:
                 continue
-            candidates = data if isinstance(data, list) else [data]
-            for item in candidates:
-                if isinstance(item, dict) and item.get("@type") == "Product":
-                    return item
-                if isinstance(item, dict) and isinstance(item.get("@graph"), list):
-                    for graph_item in item["@graph"]:
-                        if isinstance(graph_item, dict) and graph_item.get("@type") == "Product":
-                            return graph_item
-        return {}
+            queue = data if isinstance(data, list) else [data]
+            for item in queue:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("@type") == "Product":
+                    candidates.append(item)
+                graph = item.get("@graph")
+                if isinstance(graph, list):
+                    candidates.extend(x for x in graph if isinstance(x, dict) and x.get("@type") == "Product")
+        if not candidates:
+            return {}
+
+        wanted_title = canonical(title_hint)
+        wanted_path = urlparse(page_url).path.rstrip("/")
+
+        def score(item: Mapping[str, Any]) -> int:
+            points = 0
+            name = canonical(item.get("name"))
+            if wanted_title and name == wanted_title:
+                points += 20
+            elif wanted_title and name and (wanted_title in name or name in wanted_title):
+                points += 8
+            urls: list[str] = []
+            for key in ("url", "@id"):
+                value = item.get(key)
+                if isinstance(value, str):
+                    urls.append(value)
+            main = item.get("mainEntityOfPage")
+            if isinstance(main, str):
+                urls.append(main)
+            elif isinstance(main, dict):
+                for key in ("@id", "url"):
+                    if isinstance(main.get(key), str):
+                        urls.append(str(main[key]))
+            if wanted_path and any(urlparse(value).path.rstrip("/") == wanted_path for value in urls):
+                points += 15
+            if item.get("offers"):
+                points += 2
+            return points
+
+        return max(candidates, key=score)
 
     @staticmethod
     def _first_text(soup: BeautifulSoup, selectors: Sequence[str]) -> str:
@@ -631,7 +685,6 @@ class OreshakClient:
                 sections.append(normalize_space(tag.get_text(" ", strip=True)))
                 break
         if not sections:
-            # Capture only the main product content, stopping before reviews/footer.
             content = soup.select_one("#content")
             if content:
                 text = normalize_space(content.get_text(" ", strip=True))
@@ -643,7 +696,9 @@ class OreshakClient:
         if not any(sections) and json_ld.get("description"):
             sections.append(normalize_space(str(json_ld["description"])))
         description = normalize_space(" ".join(sections))
-        return description[:2000]
+        description = re.sub(r"^.*?➔\s*Описание на продукта\s*:\s*", "", description, flags=re.I)
+        description = re.split(r"➔\s*Подобни\s*:", description, maxsplit=1, flags=re.I)[0]
+        return normalize_space(description)[:2000]
 
     @staticmethod
     def _parse_attributes(soup: BeautifulSoup, description: str) -> dict[str, str]:
@@ -658,8 +713,25 @@ class OreshakClient:
                 key, value = text.split(":", 1)
                 if 1 <= len(key) <= 60 and value.strip():
                     attrs.setdefault(key.strip(), value.strip())
-        for heading in ("Характеристики", "Материал", "Тегло", "Размери", "Дължина", "Диаметър"):
-            match = re.search(rf"{heading}\s*:\s*([^.;]+)", description, re.I)
+
+        characteristics = re.search(
+            r"(?:➔\s*)?Характеристики\s*:\s*(.*?)(?=(?:➔\s*)?Предимства\s*:|(?:➔\s*)?Подобни\s*:|$)",
+            description,
+            re.I,
+        )
+        if characteristics:
+            attrs.setdefault("Характеристики", normalize_space(characteristics.group(1)))
+
+        field_patterns = {
+            "Материал": r"Материал\s*:\s*(.+?)(?=\s*(?:,|;|➔|$))",
+            "Размери": r"Размер(?:и)?(?:\s+на\s+[^:;,➔]{1,50})?\s*:\s*(\d+(?:[.,]\d+)?\s*[x/×]\s*\d+(?:[.,]\d+)?(?:\s*[x/×]\s*\d+(?:[.,]\d+)?)?\s*см)",
+            "Дебелина": r"Дебелина(?:\s+на\s+[^:;,➔]{1,50})?\s*:\s*(\d+(?:[.,]\d+)?\s*см)",
+            "Тегло": r"Тегло\s*:\s*(\d+(?:[.,]\d+)?\s*(?:кг|kg|гр|г|g))",
+            "Дължина": r"Дължина(?:\s+на\s+[^:;,➔]{1,50})?\s*:\s*(\d+(?:[.,]\d+)?\s*см)",
+            "Диаметър": r"Диаметър(?:\s+на\s+[^:;,➔]{1,50})?\s*:\s*(\d+(?:[.,]\d+)?\s*см)",
+        }
+        for heading, pattern in field_patterns.items():
+            match = re.search(pattern, description, re.I)
             if match:
                 attrs.setdefault(heading, normalize_space(match.group(1)))
         return attrs
@@ -688,7 +760,51 @@ class OreshakClient:
         return dedupe(tags)
 
     @staticmethod
-    def _parse_images(soup: BeautifulSoup, json_ld: Mapping[str, Any], base_url: str) -> list[str]:
+    def _main_product_scope(soup: BeautifulSoup) -> Tag:
+        direct = soup.select_one("#content .product-info, #content .product-page, #content .product-right")
+        if isinstance(direct, Tag):
+            return direct
+        heading = soup.select_one("#content h1, h1")
+        node: Tag | None = heading if isinstance(heading, Tag) else None
+        best: Tag | None = node
+        for _ in range(7):
+            if node is None:
+                break
+            text = normalize_space(node.get_text(" ", strip=True))
+            if node.select_one("#button-cart, button[id*='cart'], input[id*='cart']") or re.search(r"Код на продукта|Product Code", text, re.I):
+                best = node
+                if node.select_one("#button-cart, button[id*='cart']"):
+                    break
+            node = node.parent if isinstance(node.parent, Tag) else None
+        return best or soup.select_one("#content") or soup
+
+    @staticmethod
+    def _normalize_image_url(url: str) -> str:
+        parsed = urlparse(url)
+        path = quote(unquote(parsed.path), safe="/@:+-._~!$&'()*+,;=")
+        return urlunparse(parsed._replace(path=path, fragment=""))
+
+    @staticmethod
+    def _image_identity(url: str) -> str:
+        parsed = urlparse(url)
+        path = unquote(parsed.path).casefold()
+        stem, dot, ext = path.rpartition(".")
+        if not dot:
+            stem, ext = path, ""
+        stem = re.sub(r"-(?:\d{2,4}x\d{2,4})-(?:product_(?:popup|thumb)|popup|thumb)$", "", stem)
+        stem = re.sub(r"-(?:product_(?:popup|thumb)|popup|thumb)$", "", stem)
+        return stem + ("." + ext if ext else "")
+
+    @staticmethod
+    def _image_score(url: str) -> tuple[int, int]:
+        lower = unquote(url).casefold()
+        dims = re.search(r"-(\d{2,4})x(\d{2,4})-", lower)
+        pixels = int(dims.group(1)) * int(dims.group(2)) if dims else 0
+        quality = 3 if "product_popup" in lower else 1 if "product_thumb" in lower or "thumb" in lower else 2
+        return quality, pixels
+
+    @classmethod
+    def _parse_images(cls, soup: BeautifulSoup, json_ld: Mapping[str, Any], base_url: str) -> list[str]:
         urls: list[str] = []
         json_images = json_ld.get("image")
         if isinstance(json_images, str):
@@ -709,68 +825,116 @@ class OreshakClient:
                     src = img.get("data-zoom-image") or img.get("data-src") or img.get("src")
                     if src:
                         urls.append(urljoin(base_url, src))
-        # Fallback restricted to image area; intentionally excludes #tab-description.
         for tag in soup.select("#content .product-info img, #content .col-sm-4 img"):
             if tag.find_parent(id="tab-description"):
                 continue
             src = tag.get("data-zoom-image") or tag.get("data-src") or tag.get("src")
             if src:
                 urls.append(urljoin(base_url, src))
-        cleaned: list[str] = []
-        for url in urls:
-            lower = url.lower()
+
+        best: dict[str, str] = {}
+        order: list[str] = []
+        for raw_url in urls:
+            url = cls._normalize_image_url(raw_url)
+            lower = url.casefold()
             if not lower.startswith(("http://", "https://")):
                 continue
             if any(bad in lower for bad in ("logo", "no_image", "placeholder", "facebook", "loader", "icon")):
                 continue
-            # OpenCart resized images are valid URLs; prefer original when the cache path is obvious.
-            cleaned.append(url.replace("/cache/", "/"))
-        return dedupe(cleaned)
+            if not re.search(r"\.(?:jpe?g|png|webp)(?:\?|$)", lower):
+                continue
+            identity = cls._image_identity(url)
+            if identity not in best:
+                best[identity] = url
+                order.append(identity)
+            elif cls._image_score(url) > cls._image_score(best[identity]):
+                best[identity] = url
+        return [best[key] for key in order]
 
-    @staticmethod
-    def _parse_prices(soup: BeautifulSoup, json_ld: Mapping[str, Any]) -> tuple[Decimal | None, Decimal | None]:
-        current: list[Decimal] = []
-        old: list[Decimal] = []
-        for selector in (".price-new", ".product-price .special", "#content h2", ".price"):
-            for tag in soup.select(selector):
-                text = normalize_space(tag.get_text(" ", strip=True))
-                match = re.search(r"([0-9][0-9\s.,]*)\s*€", text)
-                if match:
-                    value = safe_decimal(match.group(1))
+    @classmethod
+    def _parse_prices(
+        cls, soup: BeautifulSoup, json_ld: Mapping[str, Any]
+    ) -> tuple[Decimal | None, Decimal | None, str, str]:
+        scope = cls._main_product_scope(soup)
+
+        def value_from_tag(tag: Tag) -> Decimal | None:
+            content = tag.get("content")
+            if content:
+                currency = normalize_space(tag.get("currency") or tag.get("data-currency") or "EUR").upper()
+                if currency in ("", "EUR"):
+                    value = safe_decimal(content)
                     if value is not None:
-                        current.append(value)
-        for selector in (".price-old", "del", "s"):
-            for tag in soup.select(selector):
-                match = re.search(r"([0-9][0-9\s.,]*)\s*€", normalize_space(tag.get_text(" ", strip=True)))
-                if match:
-                    value = safe_decimal(match.group(1))
+                        return value
+            text = normalize_space(tag.get_text(" ", strip=True))
+            match = re.search(r"([0-9][0-9\s.,]*)\s*€", text)
+            return safe_decimal(match.group(1)) if match else None
+
+        def first_value(selectors: Sequence[str]) -> tuple[Decimal | None, str]:
+            for selector in selectors:
+                for tag in scope.select(selector):
+                    if not isinstance(tag, Tag):
+                        continue
+                    if tag.find_parent(class_=re.compile(r"related|featured|product-grid|product-thumb", re.I)):
+                        continue
+                    value = value_from_tag(tag)
                     if value is not None:
-                        old.append(value)
+                        return value, f"main product selector: {selector}"
+            return None, ""
+
+        price, price_source = first_value((
+            ".price-new", ".special-price", "[itemprop='price'][content]", "meta[itemprop='price'][content]",
+            "ul.list-unstyled h2", ".product-price h2", "h2.price", ".product-price", ".price",
+        ))
+        list_price, list_source = first_value((".price-old", ".old-price", "del", "s"))
+
         offers = json_ld.get("offers")
-        if isinstance(offers, dict):
-            value = safe_decimal(offers.get("price"))
-            if value is not None:
-                current.append(value)
-        # Main product content often contains one current EUR price followed by BGN.
-        if not current:
-            content = normalize_space((soup.select_one("#content") or soup).get_text(" ", strip=True))
-            match = re.search(r"([0-9][0-9\s.,]*)\s*€", content)
-            if match:
-                value = safe_decimal(match.group(1))
+        offer_items = offers if isinstance(offers, list) else [offers] if isinstance(offers, dict) else []
+        if price is None:
+            for offer in offer_items:
+                if not isinstance(offer, dict):
+                    continue
+                currency = normalize_space(str(offer.get("priceCurrency") or "EUR")).upper()
+                if currency not in ("", "EUR"):
+                    continue
+                value = safe_decimal(offer.get("price") or offer.get("lowPrice"))
                 if value is not None:
-                    current.append(value)
-        price = min(current) if current else None
-        list_price = max(old) if old else price
-        return price, list_price
+                    price, price_source = value, "matched Product JSON-LD offer"
+                    break
+        if list_price is None:
+            list_price = price
+            list_source = "same as base price; no explicit old/list price"
+        if price is not None and list_price is not None and list_price < price:
+            list_price = price
+            list_source = "same as base price; extracted list price was lower"
+        return price, list_price, price_source, list_source
 
-    @staticmethod
-    def _parse_stock(soup: BeautifulSoup) -> bool:
-        text = normalize_space((soup.select_one("#content") or soup).get_text(" ", strip=True)).casefold()
+    @classmethod
+    def _parse_stock(cls, soup: BeautifulSoup, json_ld: Mapping[str, Any]) -> tuple[bool, str]:
+        offers = json_ld.get("offers")
+        offer_items = offers if isinstance(offers, list) else [offers] if isinstance(offers, dict) else []
+        for offer in offer_items:
+            if not isinstance(offer, dict):
+                continue
+            availability = str(offer.get("availability") or "").casefold()
+            if "outofstock" in availability or "soldout" in availability:
+                return False, "matched Product JSON-LD availability"
+            if "instock" in availability or "limitedavailability" in availability:
+                return True, "matched Product JSON-LD availability"
+
+        scope = cls._main_product_scope(soup)
+        button = scope.select_one("#button-cart, button[id*='cart'], input[id*='cart']")
+        if isinstance(button, Tag):
+            disabled = button.has_attr("disabled") or canonical(button.get("aria-disabled")) == "true"
+            button_text = normalize_space(button.get_text(" ", strip=True) or button.get("value") or "").casefold()
+            if disabled or any(word in button_text for word in ("неналич", "изчерпан", "out of stock")):
+                return False, "main add-to-cart control"
+            return True, "main add-to-cart control"
+
+        text = normalize_space(scope.get_text(" ", strip=True)).casefold()
         unavailable = ("неналичен", "изчерпан", "out of stock", "не е наличен")
         if any(marker in text for marker in unavailable):
-            buy_button = soup.select_one("#button-cart:not([disabled]), button[id*='cart']:not([disabled])")
-            return buy_button is not None and "неналичен" not in normalize_space(buy_button.get_text()).casefold()
-        return True
+            return False, "main product availability text"
+        return True, "no out-of-stock marker in main product area"
 
     @staticmethod
     def _parse_options(soup: BeautifulSoup) -> list[ProductOption]:
@@ -814,8 +978,15 @@ def parse_weight(text: str) -> float | None:
 
 def parse_dimensions(text: str) -> tuple[float, float, float] | None:
     normalized = text.replace(",", ".").replace("×", "x").replace("Х", "x").replace("х", "x")
+    normalized = re.sub(r"(?<=\d)\s+(?=\d\s*[/x])", "", normalized)
+    thickness_match = re.search(
+        r"дебелина(?:\s+на\s+[^:;,➔]{1,50})?\s*:?\s*(\d+(?:\.\d+)?)\s*см",
+        normalized,
+        re.I,
+    )
+    thickness = float(thickness_match.group(1)) if thickness_match else None
     patterns = [
-        r"(?:размери|размер|dimensions?)\s*:?\s*(\d+(?:\.\d+)?)\s*[x/]\s*(\d+(?:\.\d+)?)(?:\s*[x/]\s*(\d+(?:\.\d+)?))?\s*см",
+        r"(?:размер(?:и)?(?:\s+на\s+[^:;,➔]{1,50})?|dimensions?)\s*:?\s*(\d+(?:\.\d+)?)\s*[x/]\s*(\d+(?:\.\d+)?)(?:\s*[x/]\s*(\d+(?:\.\d+)?))?\s*см",
         r"(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)(?:\s*x\s*(\d+(?:\.\d+)?))?\s*см",
     ]
     for pattern in patterns:
@@ -823,12 +994,13 @@ def parse_dimensions(text: str) -> tuple[float, float, float] | None:
         if match:
             dims = [float(v) for v in match.groups() if v]
             if len(dims) == 2:
-                dims.append(3.0)
-            return round(max(dims), 1), round(sorted(dims, reverse=True)[1], 1), round(min(dims), 1)
+                dims.append(thickness if thickness is not None else 3.0)
+            ordered = sorted((max(v, 0.1) for v in dims), reverse=True)
+            return round(ordered[0], 1), round(ordered[1], 1), round(ordered[2], 1)
     diameter = re.search(r"(?:диаметър|ф|Ø)\s*:?\s*(\d+(?:\.\d+)?)\s*см?", normalized, re.I)
     if diameter:
         d = float(diameter.group(1))
-        return round(d, 1), round(d, 1), 5.0
+        return round(d, 1), round(d, 1), round(thickness if thickness is not None else 5.0, 1)
     blade = re.search(r"дължина на острието\s*:?\s*(\d+(?:\.\d+)?)\s*см", normalized, re.I)
     handle = re.search(r"дължина на дръжката\s*:?\s*(\d+(?:\.\d+)?)\s*см", normalized, re.I)
     total = re.search(r"обща дължина\s*:?\s*(\d+(?:\.\d+)?)\s*см", normalized, re.I)
@@ -1028,7 +1200,7 @@ def infer_required_value(column: str, product: Product, variant: Variant, row: d
     return "Not Applicable"
 
 
-def build_row(variant: Variant, schema: TemplateSchema, config: Mapping[str, Any]) -> tuple[dict[str, Any], list[str]]:
+def build_row(variant: Variant, schema: TemplateSchema, config: Mapping[str, Any]) -> tuple[dict[str, Any], list[str], list[str]]:
     product = variant.product
     multiplier = safe_decimal(config.get("price_multiplier", 1)) or Decimal("1")
     price_eur = (product.price_eur * multiplier).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) if product.price_eur is not None else None
@@ -1071,9 +1243,14 @@ def build_row(variant: Variant, schema: TemplateSchema, config: Mapping[str, Any
     # Data Definitions additionally marks these offer fields required even when
     # the category-mode helper sheet does not list them.
     required.update({"E", "L", "M", "N", "PF", "PT", "QE", "QF", "QH", "QJ", "QK", "QL", "QM", "QY", "QZ", "RA", "RC", "TD", "TE", "TF"})
+    review_notes: list[str] = []
     for column in sorted(required, key=col_number):
         if row.get(column) in (None, ""):
-            row[column] = infer_required_value(column, product, variant, row, schema, config)
+            inferred = infer_required_value(column, product, variant, row, schema, config)
+            row[column] = inferred
+            if inferred not in (None, ""):
+                header = schema.headers.get(column, column)
+                review_notes.append(f"Auto-filled required {column} ({header}) with: {inferred}")
 
     # Known conditional requirements are filled only when their parent choice triggers them.
     conditionals = schema.conditional_columns(product.category_id)
@@ -1097,7 +1274,11 @@ def build_row(variant: Variant, schema: TemplateSchema, config: Mapping[str, Any
         elif "Battery Capacity" in header:
             should_fill = "battery" in power and "without" not in power
         if should_fill and row.get(column) in (None, ""):
-            row[column] = infer_required_value(column, product, variant, row, schema, config)
+            inferred = infer_required_value(column, product, variant, row, schema, config)
+            row[column] = inferred
+            if inferred not in (None, ""):
+                header = schema.headers.get(column, column)
+                review_notes.append(f"Auto-filled conditional {column} ({header}) with: {inferred}")
 
     errors: list[str] = []
     for column in sorted(required, key=col_number):
@@ -1109,7 +1290,7 @@ def build_row(variant: Variant, schema: TemplateSchema, config: Mapping[str, Any
         errors.append("No EUR price")
     if product.category_id not in schema.category_names:
         errors.append(f"Unknown Temu category {product.category_id}")
-    return row, errors
+    return row, errors, dedupe(review_notes)
 
 
 class XlsxTemplateWriter:
@@ -1204,10 +1385,13 @@ def raw_product_row(product: Product) -> dict[str, Any]:
         "temu_category_id": product.category_id, "temu_mapping_reason": product.mapping_reason,
         "mapping_confidence": product.mapping_confidence, "description": product.description,
         "price_eur": product.price_eur, "list_price_eur": product.list_price_eur,
-        "availability": "in_stock" if product.in_stock else "out_of_stock",
-        "weight_g": product.weight_g, "length_cm": product.dimensions_cm[0] if product.dimensions_cm else "",
+        "price_source": product.price_source, "list_price_source": product.list_price_source,
+        "availability": "in_stock" if product.in_stock else "out_of_stock", "stock_source": product.stock_source,
+        "weight_g": product.weight_g, "weight_source": product.weight_source,
+        "length_cm": product.dimensions_cm[0] if product.dimensions_cm else "",
         "width_cm": product.dimensions_cm[1] if product.dimensions_cm else "",
         "height_cm": product.dimensions_cm[2] if product.dimensions_cm else "",
+        "dimensions_source": product.dimensions_source,
         "product_url": product.url, "images": " | ".join(product.images),
         "attributes_json": json.dumps(product.attributes, ensure_ascii=False),
         "options_json": json.dumps([option.__dict__ for option in product.options], ensure_ascii=False),
@@ -1220,7 +1404,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--template", default="template.xlsx", help="Temu XLSX template")
     parser.add_argument("--config", default="config.json", help="JSON configuration")
     parser.add_argument("--output-dir", default="output", help="Output directory")
-    parser.add_argument("--limit", type=int, default=10, help="Maximum source products; 0 means all")
+    parser.add_argument("--limit", type=int, default=10, help="Maximum source products overall; 0 means all")
+    parser.add_argument("--limit-per-category", type=int, default=0, help="Maximum products from each category; 0 means all")
     parser.add_argument("--category", action="append", help="Run only URL/slug containing this value")
     parser.add_argument("--schema-only", action="store_true", help="Validate template/config without scraping")
     return parser.parse_args()
@@ -1261,6 +1446,8 @@ def main() -> int:
             except Exception as exc:
                 logging.exception("Category failed: %s: %s", category_url, exc)
                 continue
+            if args.limit_per_category:
+                links = links[:args.limit_per_category]
             for link in links:
                 if link not in seen_links:
                     seen_links.add(link)
@@ -1280,9 +1467,6 @@ def main() -> int:
                 product.category_id, product.mapping_reason, product.mapping_confidence = category_for(product, overrides, schema)
                 if product.category_id not in schema.category_names:
                     raise ValueError(f"Mapped category {product.category_id} is not in the template")
-                if not product.in_stock and not bool(config.get("include_out_of_stock", True)):
-                    logging.info("Skipping out-of-stock product: %s", product.title)
-                    continue
                 products.append(product)
             except Exception as exc:
                 logging.exception("Product failed: %s", url)
@@ -1298,15 +1482,24 @@ def main() -> int:
                 "temu_category_name": schema.category_names.get(product.category_id, ""),
                 "mapping_reason": product.mapping_reason, "mapping_confidence": product.mapping_confidence,
             })
+            if not product.in_stock and not bool(config.get("include_out_of_stock", True)):
+                validation_rows.append({
+                    "product_code": product.code, "sku": product.code, "product_url": product.url,
+                    "temu_category_id": product.category_id, "status": "SKIPPED",
+                    "issues": "Out of stock; retained in raw export but excluded from Temu upload",
+                })
+                continue
             for variant in expand_variants(product):
                 if len(temu_rows) >= MAX_TEMU_ROWS:
                     logging.warning("Temu limit of %s rows reached; remaining variants omitted", MAX_TEMU_ROWS)
                     break
-                row, errors = build_row(variant, schema, config)
+                row, errors, row_review_notes = build_row(variant, schema, config)
+                all_review_notes = [*product.warnings, *row_review_notes]
+                status = "ERROR" if errors else "REVIEW" if all_review_notes else "OK"
                 validation_rows.append({
                     "product_code": product.code, "sku": variant.sku, "product_url": product.url,
-                    "temu_category_id": product.category_id, "status": "ERROR" if errors else "OK",
-                    "issues": " | ".join(errors),
+                    "temu_category_id": product.category_id, "status": status,
+                    "issues": " | ".join([*errors, *all_review_notes]),
                 })
                 if errors:
                     logging.error("Row omitted for %s: %s", variant.sku, "; ".join(errors))
@@ -1318,8 +1511,9 @@ def main() -> int:
         writer.write(temu_rows, xlsx_path)
         raw_fields = [
             "product_code", "product_name", "source_category", "temu_category_id", "temu_mapping_reason",
-            "mapping_confidence", "description", "price_eur", "list_price_eur", "availability", "weight_g",
-            "length_cm", "width_cm", "height_cm", "product_url", "images", "attributes_json", "options_json", "warnings",
+            "mapping_confidence", "description", "price_eur", "list_price_eur", "price_source", "list_price_source",
+            "availability", "stock_source", "weight_g", "weight_source", "length_cm", "width_cm", "height_cm",
+            "dimensions_source", "product_url", "images", "attributes_json", "options_json", "warnings",
         ]
         write_csv(output_dir / "oreshak_raw_export.csv", raw_fields, (raw_product_row(p) for p in products))
         write_csv(output_dir / "category_mapping_review.csv", [
@@ -1333,7 +1527,10 @@ def main() -> int:
         summary = {
             "categories_requested": len(category_urls), "products_discovered": len(discovered),
             "products_parsed": len(products), "temu_rows_written": len(temu_rows),
-            "failed_products": len(failures), "rows_with_errors": sum(1 for row in validation_rows if row["status"] == "ERROR"),
+            "failed_products": len(failures),
+            "rows_with_errors": sum(1 for row in validation_rows if row["status"] == "ERROR"),
+            "rows_for_review": sum(1 for row in validation_rows if row["status"] == "REVIEW"),
+            "out_of_stock_skipped": sum(1 for row in validation_rows if row["status"] == "SKIPPED"),
             "output_file": str(xlsx_path),
         }
         (output_dir / "run_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
