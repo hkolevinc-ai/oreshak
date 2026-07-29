@@ -968,18 +968,22 @@ class OreshakClient:
             qty_match = re.search(r"(?:налични|в наличност|available)\s*[:\-]?\s*(\d+)\s*(?:бр|pcs|pieces)?", text, re.I)
             detected_qty = int(qty_match.group(1)) if qty_match else None
 
+        lowered = text.casefold()
+        unavailable = (
+            "няма наличност", "неналичен", "неналична", "изчерпан",
+            "out of stock", "sold out", "не е наличен", "не е налична",
+        )
+        if any(marker in lowered for marker in unavailable):
+            return False, "main product availability text", 0
+
         button = scope.select_one("#button-cart, button[id*='cart'], input[id*='cart']")
         if isinstance(button, Tag):
             disabled = button.has_attr("disabled") or canonical(button.get("aria-disabled")) == "true"
             button_text = normalize_space(button.get_text(" ", strip=True) or button.get("value") or "").casefold()
-            if disabled or any(word in button_text for word in ("неналич", "изчерпан", "out of stock")):
+            if disabled or any(word in button_text for word in ("неналич", "изчерпан", "out of stock", "sold out")):
                 return False, "main add-to-cart control", 0
-            return True, "main add-to-cart control", detected_qty
+            return True, "enabled main add-to-cart control", detected_qty
 
-        lowered = text.casefold()
-        unavailable = ("неналичен", "изчерпан", "out of stock", "не е наличен")
-        if any(marker in lowered for marker in unavailable):
-            return False, "main product availability text", 0
         return True, "no out-of-stock marker in main product area", detected_qty
 
     @staticmethod
@@ -1076,6 +1080,12 @@ def parse_dimensions(text: str) -> tuple[float, float, float] | None:
         re.I,
     )
     explicit_height = _to_cm(height_match.group(1), height_match.group(2)) if height_match else None
+    depth_match = re.search(
+        r"(?:дълбочина|depth)(?:\s+на\s+[^:;,➔]{1,50})?\s*:?\s*(\d+(?:\.\d+)?)\s*(мм|mm|см|cm|м|m)",
+        normalized,
+        re.I,
+    )
+    explicit_depth = _to_cm(depth_match.group(1), depth_match.group(2)) if depth_match else None
 
     # Prefer outer/closed/frame dimensions. Keep the text between the label and
     # the first number short so the regex cannot drift into a later "inner size".
@@ -1095,12 +1105,16 @@ def parse_dimensions(text: str) -> tuple[float, float, float] | None:
         if c:
             dims.append(_to_cm(c, unit))
         else:
-            inferred = thickness or explicit_height
-            # Tiny square dice/game pieces are cubes.
+            inferred = thickness or explicit_height or explicit_depth
+            # Tiny square dice/game pieces are cubes. This is the only safe
+            # geometric inference from two equal published measurements.
             if inferred is None and max(dims) <= 1.5 and abs(dims[0] - dims[1]) <= 0.05:
                 inferred = dims[0]
+            # Do not manufacture a third dimension for flat textiles, paintings,
+            # spoons, boxes, etc. The writer will use a category fallback and
+            # flag the row for review instead.
             if inferred is None:
-                inferred = max(0.5, min(dims) * 0.15)
+                continue
             dims.append(inferred)
         return tuple(round(v, 2) for v in sorted((max(v, 0.1) for v in dims), reverse=True))
 
@@ -1113,7 +1127,10 @@ def parse_dimensions(text: str) -> tuple[float, float, float] | None:
     diameter = re.search(r"(?:диаметър|ф|Ø)\s*:?\s*(\d+(?:\.\d+)?)\s*(мм|mm|см|cm|м|m)?", normalized, re.I)
     if diameter:
         d = _to_cm(diameter.group(1), diameter.group(2))
-        return round(d, 2), round(d, 2), round(thickness or explicit_height or max(0.5, d * 0.15), 2)
+        third = thickness or explicit_height or explicit_depth
+        if third is None:
+            return None
+        return round(d, 2), round(d, 2), round(third, 2)
 
     # Tall narrow objects sometimes publish height and opening only.
     opening = re.search(r"отвор\s*:?\s*(\d+(?:\.\d+)?)\s*(мм|mm|см|cm|м|m)", normalized, re.I)
@@ -1392,7 +1409,7 @@ def infer_required_value(column: str, product: Product, variant: Variant, row: d
     if "Thickness" in header and "unit" in schema.internal_keys.get(column, "").casefold():
         return choose_valid(dropdown, ["cm"])
     if "Wood Type" in header:
-        return choose_valid(dropdown, ["Solid Wood", "Natural Wood", "Wood"], fallback_first=False)
+        return choose_valid(dropdown, ["Log", "Solid Wood", "Natural Wood", "Wood"], fallback_first=False)
     if "Wood Species" in header:
         species_candidates: list[str] = []
         for bg, candidates in WOOD_SPECIES.items():
