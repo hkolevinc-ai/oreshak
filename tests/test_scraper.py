@@ -7,7 +7,7 @@ import scraper
 
 class ParserTests(unittest.TestCase):
     def test_project_version_matches_bundle(self):
-        self.assertEqual(scraper.PROJECT_VERSION, "6.1")
+        self.assertEqual(scraper.PROJECT_VERSION, "6.2")
 
     def test_price_is_taken_from_main_product_not_related_cards(self):
         html = '''
@@ -343,6 +343,46 @@ class ParserTests(unittest.TestCase):
         category_id, _, confidence = scraper.category_for(product, {}, FakeSchema())
         self.assertEqual(category_id, "10703")
         self.assertEqual(confidence, "high")
+
+    def test_strict_measurements_reject_missing_weight_and_dimensions(self):
+        product = scraper.Product(
+            url="https://oreshak.bg/painting",
+            source_category_url="https://oreshak.bg/kartini-ot-bulgaria",
+            title="КАРТИНА",
+        )
+        errors = scraper.source_measurement_errors(product, {
+            "omit_rows_with_fallback_measurements": True,
+            "omit_rows_with_ambiguous_set_dimensions": True,
+        })
+        self.assertTrue(any("weight" in error.casefold() for error in errors))
+        self.assertTrue(any("dimensions" in error.casefold() for error in errors))
+
+    def test_non_strict_measurements_allow_category_fallback(self):
+        product = scraper.Product(
+            url="https://oreshak.bg/painting",
+            source_category_url="https://oreshak.bg/kartini-ot-bulgaria",
+            title="КАРТИНА",
+        )
+        errors = scraper.source_measurement_errors(product, {
+            "omit_rows_with_fallback_measurements": False,
+            "omit_rows_with_ambiguous_set_dimensions": False,
+        })
+        self.assertEqual(errors, [])
+
+    def test_multi_piece_dice_dimensions_are_not_used_as_package_dimensions(self):
+        product = scraper.Product(
+            url="https://oreshak.bg/dice",
+            source_category_url="https://oreshak.bg/aksesoari-za-shah-i-tabla",
+            title="ЗАРЧЕТА ОТ КОСТ ЗА ТАБЛА 6.4 ММ",
+            description="Един комплект съдържа 2 броя зарчета с размер 6.4 мм. на страна.",
+            weight_g=1.0,
+            dimensions_cm=(0.64, 0.64, 0.64),
+        )
+        errors = scraper.source_measurement_errors(product, {
+            "omit_rows_with_fallback_measurements": True,
+            "omit_rows_with_ambiguous_set_dimensions": True,
+        })
+        self.assertTrue(any("2 pieces" in error for error in errors))
 
     def test_decorative_novelty_plate_is_not_assumed_food_safe(self):
         class FakeSchema:

@@ -41,7 +41,7 @@ NS_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 NS_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 NS_XML = "http://www.w3.org/XML/1998/namespace"
 NS = {"a": NS_MAIN, "r": NS_REL}
-PROJECT_VERSION = "6.1"
+PROJECT_VERSION = "6.2"
 MAX_TEMU_ROWS = 2000
 
 SOURCE_DEFAULTS: dict[str, str] = {
@@ -584,8 +584,8 @@ class OreshakClient:
         source_text = product.description + " " + " ".join(product.attributes.values())
         product.weight_g = parse_weight(source_text)
         product.dimensions_cm = parse_dimensions(source_text)
-        product.weight_source = "product description/attributes" if product.weight_g is not None else "category fallback"
-        product.dimensions_source = "product description/attributes" if product.dimensions_cm is not None else "category fallback"
+        product.weight_source = "product description/attributes" if product.weight_g is not None else "missing"
+        product.dimensions_source = "product description/attributes" if product.dimensions_cm is not None else "missing"
         if not product.code:
             product.code = self._generated_code(url, product.title)
             product.warnings.append("Product code was generated from URL/title")
@@ -593,10 +593,19 @@ class OreshakClient:
             product.warnings.append("No product gallery image found")
         if product.price_eur is None:
             product.warnings.append("EUR price not found")
+        strict_measurements = bool(self.config.get("omit_rows_with_fallback_measurements", True))
         if product.weight_g is None:
-            product.warnings.append("Package weight will use a category fallback and must be reviewed")
+            product.warnings.append(
+                "Weight is not published; row will be omitted in strict mode"
+                if strict_measurements
+                else "Package weight will use a category fallback and must be reviewed"
+            )
         if product.dimensions_cm is None:
-            product.warnings.append("Package dimensions will use a category fallback and must be reviewed")
+            product.warnings.append(
+                "Complete three-dimensional size is not published; row will be omitted in strict mode"
+                if strict_measurements
+                else "Package dimensions will use a category fallback and must be reviewed"
+            )
         if product.list_price_eur is not None and product.price_eur is not None and product.list_price_eur <= product.price_eur:
             product.list_price_eur = None
             product.list_price_source = "discarded because it was not higher than base price"
@@ -1445,6 +1454,51 @@ def infer_required_value(column: str, product: Product, variant: Variant, row: d
     return "Not Applicable"
 
 
+def ambiguous_set_measurement_reason(product: Product) -> str:
+    """Identify when dimensions describe one component rather than the sold set."""
+    text = normalize_space(" ".join([product.title, product.description, *product.attributes.values()])).casefold()
+    if not product.dimensions_cm:
+        return ""
+    count_match = re.search(
+        r"(?:комплект(?:ът)?\s+(?:се\s+)?съдържа|съдържа)\s*[:\-]?\s*(\d+)\s*(?:броя|бр\.?)",
+        text,
+        re.I,
+    )
+    if not count_match:
+        return ""
+    count = int(count_match.group(1))
+    if count <= 1:
+        return ""
+    per_item_language = any(
+        token in text
+        for token in (
+            "на страна",
+            "на всяка от страните",
+            "всеки е с размер",
+            "размер на всеки",
+            "размерът на всеки",
+        )
+    )
+    if per_item_language:
+        return f"Published dimensions describe one item, while the offer contains {count} pieces"
+    return ""
+
+
+def source_measurement_errors(product: Product, config: Mapping[str, Any]) -> list[str]:
+    """Validate source-backed measurements before an upload row is accepted."""
+    errors: list[str] = []
+    if bool(config.get("omit_rows_with_fallback_measurements", True)):
+        if product.weight_g is None:
+            errors.append("No source-backed weight; category fallback measurements are disabled")
+        if product.dimensions_cm is None:
+            errors.append("No complete source-backed 3D dimensions; category fallback measurements are disabled")
+    if bool(config.get("omit_rows_with_ambiguous_set_dimensions", True)):
+        reason = ambiguous_set_measurement_reason(product)
+        if reason:
+            errors.append(reason)
+    return errors
+
+
 def prices_for_upload(product: Product, config: Mapping[str, Any]) -> tuple[Decimal | None, Decimal | None, str]:
     """Return the Temu selling price, Temu list price and a traceable basis.
 
@@ -1575,7 +1629,8 @@ def build_row(variant: Variant, schema: TemplateSchema, config: Mapping[str, Any
         errors.append(f"Unknown Temu category {product.category_id}")
     if product.mapping_confidence == "low":
         errors.append(f"No safe Temu category mapping: {product.mapping_reason}; add category_overrides.csv entry")
-    return row, errors, dedupe(review_notes)
+    errors.extend(source_measurement_errors(product, config))
+    return row, dedupe(errors), dedupe(review_notes)
 
 
 class XlsxTemplateWriter:
