@@ -31,9 +31,9 @@ jobs:
       - name: Verify bundle version and remove stale tests
         shell: bash
         run: |
-          test "$(tr -d '\r\n' < VERSION.txt)" = "6.2"
+          test "$(tr -d '\r\n' < VERSION.txt)" = "6.3"
           if grep -R --line-number "test_depth_is_used_as_third_dimension" tests; then
-            echo "Stale v5 test file detected. Replace the entire tests folder with v6.2."
+            echo "Stale v5 test file detected. Replace the entire tests folder with v6.3."
             exit 1
           fi
       - name: Run parser tests
