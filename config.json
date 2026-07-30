@@ -37,6 +37,10 @@
   "max_sku_images": 10,
   "category_overrides_file": "category_overrides.csv",
   "use_pre_promotion_price": true,
-  "omit_rows_with_fallback_measurements": true,
-  "omit_rows_with_ambiguous_set_dimensions": true
+  "omit_rows_with_fallback_measurements": false,
+  "omit_rows_with_ambiguous_set_dimensions": false,
+  "package_measurement_mode": "estimate_and_review",
+  "package_dimension_padding_cm": 2.0,
+  "package_weight_padding_percent": 10.0,
+  "package_weight_padding_min_g": 50.0
 }

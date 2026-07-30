@@ -41,7 +41,7 @@ NS_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 NS_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 NS_XML = "http://www.w3.org/XML/1998/namespace"
 NS = {"a": NS_MAIN, "r": NS_REL}
-PROJECT_VERSION = "6.2"
+PROJECT_VERSION = "6.3"
 MAX_TEMU_ROWS = 2000
 
 SOURCE_DEFAULTS: dict[str, str] = {
@@ -593,18 +593,21 @@ class OreshakClient:
             product.warnings.append("No product gallery image found")
         if product.price_eur is None:
             product.warnings.append("EUR price not found")
-        strict_measurements = bool(self.config.get("omit_rows_with_fallback_measurements", True))
+        measurement_mode = str(self.config.get("package_measurement_mode", "strict")).strip().casefold()
+        strict_measurements = measurement_mode == "strict" or bool(
+            self.config.get("omit_rows_with_fallback_measurements", True)
+        )
         if product.weight_g is None:
             product.warnings.append(
                 "Weight is not published; row will be omitted in strict mode"
                 if strict_measurements
-                else "Package weight will use a category fallback and must be reviewed"
+                else "Weight is not published; estimated package weight will use a category fallback and be marked REVIEW"
             )
         if product.dimensions_cm is None:
             product.warnings.append(
                 "Complete three-dimensional size is not published; row will be omitted in strict mode"
                 if strict_measurements
-                else "Package dimensions will use a category fallback and must be reviewed"
+                else "Complete 3D size is not published; estimated package dimensions will use a category fallback and be marked REVIEW"
             )
         if product.list_price_eur is not None and product.price_eur is not None and product.list_price_eur <= product.price_eur:
             product.list_price_eur = None
@@ -1484,15 +1487,85 @@ def ambiguous_set_measurement_reason(product: Product) -> str:
     return ""
 
 
+def package_measurements_for_upload(
+    product: Product, config: Mapping[str, Any]
+) -> tuple[float, tuple[float, float, float], list[str], str, str]:
+    """Return package weight/dimensions plus traceable REVIEW notes.
+
+    Temu requires measurements for the packed SKU, while Oreshak usually
+    publishes measurements for the unpacked product. In ``estimate_and_review``
+    mode the scraper adds a configurable packing allowance to source-backed
+    measurements. Missing or ambiguous measurements use the category fallback.
+    Every estimated/fallback value is explicitly reported as a REVIEW note.
+    """
+    default_weight, default_l, default_w, default_h = DEFAULT_PACKAGE.get(
+        product.category_id, (500, 30, 20, 10)
+    )
+    mode = str(config.get("package_measurement_mode", "strict")).strip().casefold()
+    notes: list[str] = []
+
+    if mode != "estimate_and_review":
+        weight = float(product.weight_g if product.weight_g is not None else default_weight)
+        dims = tuple(float(v) for v in (product.dimensions_cm or (default_l, default_w, default_h)))
+        weight_basis = "published product weight" if product.weight_g is not None else "category fallback"
+        dims_basis = "published product dimensions" if product.dimensions_cm is not None else "category fallback"
+        return weight, dims, notes, weight_basis, dims_basis
+
+    padding_cm = max(0.0, float(config.get("package_dimension_padding_cm", 2.0)))
+    weight_percent = max(0.0, float(config.get("package_weight_padding_percent", 10.0)))
+    weight_min_g = max(0.0, float(config.get("package_weight_padding_min_g", 50.0)))
+
+    if product.weight_g is not None:
+        added_weight = max(float(product.weight_g) * weight_percent / 100.0, weight_min_g)
+        weight = float(product.weight_g) + added_weight
+        weight_basis = (
+            f"estimated package weight: published {float(product.weight_g):g} g + "
+            f"{added_weight:g} g packing allowance"
+        )
+        notes.append(weight_basis)
+    else:
+        weight = float(default_weight)
+        weight_basis = f"estimated package weight: category fallback {weight:g} g (source weight missing)"
+        notes.append(weight_basis)
+
+    ambiguous_reason = ambiguous_set_measurement_reason(product)
+    if product.dimensions_cm is not None and not ambiguous_reason:
+        source_dims = tuple(float(v) for v in product.dimensions_cm)
+        dims = tuple(v + padding_cm for v in source_dims)
+        dims_basis = (
+            "estimated package dimensions: published "
+            + " × ".join(f"{v:g}" for v in source_dims)
+            + f" cm + {padding_cm:g} cm packing allowance per dimension"
+        )
+        notes.append(dims_basis)
+    else:
+        dims = (float(default_l), float(default_w), float(default_h))
+        reason = ambiguous_reason or "complete source 3D dimensions missing"
+        dims_basis = (
+            "estimated package dimensions: category fallback "
+            + " × ".join(f"{v:g}" for v in dims)
+            + f" cm ({reason})"
+        )
+        notes.append(dims_basis)
+
+    return round(weight, 1), tuple(round(v, 1) for v in dims), dedupe(notes), weight_basis, dims_basis
+
+
 def source_measurement_errors(product: Product, config: Mapping[str, Any]) -> list[str]:
     """Validate source-backed measurements before an upload row is accepted."""
+    mode = str(config.get("package_measurement_mode", "")).strip().casefold()
+    if mode == "estimate_and_review":
+        return []
+
     errors: list[str] = []
-    if bool(config.get("omit_rows_with_fallback_measurements", True)):
+    strict_fallback = mode == "strict" or bool(config.get("omit_rows_with_fallback_measurements", True))
+    strict_ambiguous = mode == "strict" or bool(config.get("omit_rows_with_ambiguous_set_dimensions", True))
+    if strict_fallback:
         if product.weight_g is None:
             errors.append("No source-backed weight; category fallback measurements are disabled")
         if product.dimensions_cm is None:
             errors.append("No complete source-backed 3D dimensions; category fallback measurements are disabled")
-    if bool(config.get("omit_rows_with_ambiguous_set_dimensions", True)):
+    if strict_ambiguous:
         reason = ambiguous_set_measurement_reason(product)
         if reason:
             errors.append(reason)
@@ -1565,10 +1638,9 @@ def build_row(variant: Variant, schema: TemplateSchema, config: Mapping[str, Any
         row[col_letter(col_number("PT") + i)] = image
     row["PT"] = variant.image or (product.images[0] if product.images else "")
 
-    default_weight, default_l, default_w, default_h = DEFAULT_PACKAGE.get(product.category_id, (500, 30, 20, 10))
-    dims = product.dimensions_cm or (default_l, default_w, default_h)
-    row.update({"QJ": round(product.weight_g or default_weight, 1), "QK": round(max(dims), 1),
-                "QL": round(sorted(dims, reverse=True)[1], 1), "QM": round(min(dims), 1),
+    package_weight, package_dims, package_review_notes, _, _ = package_measurements_for_upload(product, config)
+    row.update({"QJ": round(package_weight, 1), "QK": round(max(package_dims), 1),
+                "QL": round(sorted(package_dims, reverse=True)[1], 1), "QM": round(min(package_dims), 1),
                 "QO": choose_valid(schema.dropdown_for("QO", product.category_id, row), ["Yes"]),
                 "QP": 1, "QQ": choose_valid(schema.dropdown_for("QQ", product.category_id, row), ["piece"])})
 
@@ -1576,7 +1648,7 @@ def build_row(variant: Variant, schema: TemplateSchema, config: Mapping[str, Any
     # Data Definitions additionally marks these offer fields required even when
     # the category-mode helper sheet does not list them.
     required.update({"E", "L", "M", "N", "PF", "PT", "QE", "QF", "QJ", "QK", "QL", "QM", "QY", "QZ", "RA", "RC", "TD", "TE", "TF"})
-    review_notes: list[str] = []
+    review_notes: list[str] = list(package_review_notes)
     for column in sorted(required, key=col_number):
         if column == "QH" and canonical(row.get("QI")) == canonical("N/A"):
             continue
@@ -1721,6 +1793,7 @@ def write_csv(path: Path, fieldnames: Sequence[str], rows: Iterable[Mapping[str,
 
 def raw_product_row(product: Product, config: Mapping[str, Any]) -> dict[str, Any]:
     upload_price_eur, upload_list_price_eur, upload_price_basis = prices_for_upload(product, config)
+    package_weight, package_dims, package_notes, package_weight_basis, package_dimensions_basis = package_measurements_for_upload(product, config)
     return {
         "product_code": product.code, "product_name": product.title, "source_category": product.source_category_name,
         "temu_category_id": product.category_id, "temu_mapping_reason": product.mapping_reason,
@@ -1735,6 +1808,13 @@ def raw_product_row(product: Product, config: Mapping[str, Any]) -> dict[str, An
         "width_cm": product.dimensions_cm[1] if product.dimensions_cm else "",
         "height_cm": product.dimensions_cm[2] if product.dimensions_cm else "",
         "dimensions_source": product.dimensions_source,
+        "package_weight_g": package_weight,
+        "package_length_cm": max(package_dims),
+        "package_width_cm": sorted(package_dims, reverse=True)[1],
+        "package_height_cm": min(package_dims),
+        "package_weight_basis": package_weight_basis,
+        "package_dimensions_basis": package_dimensions_basis,
+        "package_review_notes": " | ".join(package_notes),
         "product_url": product.url, "images": " | ".join(product.images),
         "attributes_json": json.dumps(product.attributes, ensure_ascii=False),
         "options_json": json.dumps([option.__dict__ for option in product.options], ensure_ascii=False),
@@ -1859,7 +1939,9 @@ def main() -> int:
             "mapping_confidence", "description", "price_eur", "list_price_eur", "price_source", "list_price_source",
             "upload_price_eur", "upload_list_price_eur", "upload_price_basis",
             "availability", "stock_source", "stock_quantity", "weight_g", "weight_source", "length_cm", "width_cm", "height_cm",
-            "dimensions_source", "product_url", "images", "attributes_json", "options_json", "warnings",
+            "dimensions_source", "package_weight_g", "package_length_cm", "package_width_cm", "package_height_cm",
+            "package_weight_basis", "package_dimensions_basis", "package_review_notes",
+            "product_url", "images", "attributes_json", "options_json", "warnings",
         ]
         write_csv(output_dir / "oreshak_raw_export.csv", raw_fields, (raw_product_row(p, config) for p in products))
         write_csv(output_dir / "category_mapping_review.csv", [

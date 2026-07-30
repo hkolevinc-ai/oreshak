@@ -7,7 +7,7 @@ import scraper
 
 class ParserTests(unittest.TestCase):
     def test_project_version_matches_bundle(self):
-        self.assertEqual(scraper.PROJECT_VERSION, "6.2")
+        self.assertEqual(scraper.PROJECT_VERSION, "6.3")
 
     def test_price_is_taken_from_main_product_not_related_cards(self):
         html = '''
@@ -383,6 +383,63 @@ class ParserTests(unittest.TestCase):
             "omit_rows_with_ambiguous_set_dimensions": True,
         })
         self.assertTrue(any("2 pieces" in error for error in errors))
+
+
+    def test_estimated_package_measurements_add_padding_and_review_notes(self):
+        product = scraper.Product(
+            url="https://oreshak.bg/item",
+            source_category_url="https://oreshak.bg/aksesoari-za-lovni-trofei",
+            title="ДЪРВЕН ПРОДУКТ",
+            category_id="32650",
+            weight_g=1000.0,
+            dimensions_cm=(30.0, 20.0, 10.0),
+        )
+        weight, dims, notes, weight_basis, dims_basis = scraper.package_measurements_for_upload(product, {
+            "package_measurement_mode": "estimate_and_review",
+            "package_dimension_padding_cm": 2.0,
+            "package_weight_padding_percent": 10.0,
+            "package_weight_padding_min_g": 50.0,
+        })
+        self.assertEqual(weight, 1100.0)
+        self.assertEqual(dims, (32.0, 22.0, 12.0))
+        self.assertTrue(notes)
+        self.assertIn("estimated package weight", weight_basis)
+        self.assertIn("estimated package dimensions", dims_basis)
+
+    def test_estimated_package_measurements_use_category_fallback_when_missing(self):
+        product = scraper.Product(
+            url="https://oreshak.bg/item",
+            source_category_url="https://oreshak.bg/aksesoari-za-lovni-trofei",
+            title="ДЪРВЕН ПРОДУКТ",
+            category_id="32650",
+        )
+        weight, dims, notes, weight_basis, dims_basis = scraper.package_measurements_for_upload(product, {
+            "package_measurement_mode": "estimate_and_review",
+        })
+        self.assertEqual(weight, 600.0)
+        self.assertEqual(dims, (35.0, 25.0, 5.0))
+        self.assertTrue(notes)
+        self.assertIn("category fallback", weight_basis)
+        self.assertIn("category fallback", dims_basis)
+        self.assertEqual(scraper.source_measurement_errors(product, {"package_measurement_mode": "estimate_and_review"}), [])
+
+    def test_ambiguous_set_dimensions_use_fallback_and_review(self):
+        product = scraper.Product(
+            url="https://oreshak.bg/dice",
+            source_category_url="https://oreshak.bg/aksesoari-za-shah-i-tabla",
+            title="ЗАРЧЕТА ОТ КОСТ ЗА ТАБЛА 6.4 ММ",
+            description="Един комплект съдържа 2 броя зарчета с размер 6.4 мм. на страна.",
+            category_id="25613",
+            weight_g=1.0,
+            dimensions_cm=(0.64, 0.64, 0.64),
+        )
+        weight, dims, notes, _, dims_basis = scraper.package_measurements_for_upload(product, {
+            "package_measurement_mode": "estimate_and_review",
+        })
+        self.assertEqual(weight, 51.0)
+        self.assertEqual(dims, (20.0, 15.0, 8.0))
+        self.assertTrue(notes)
+        self.assertIn("2 pieces", dims_basis)
 
     def test_decorative_novelty_plate_is_not_assumed_food_safe(self):
         class FakeSchema:
