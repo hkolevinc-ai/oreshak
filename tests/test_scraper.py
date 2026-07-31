@@ -7,7 +7,7 @@ import scraper
 
 class ParserTests(unittest.TestCase):
     def test_project_version_matches_bundle(self):
-        self.assertEqual(scraper.PROJECT_VERSION, "6.3")
+        self.assertEqual(scraper.PROJECT_VERSION, "6.4")
 
     def test_price_is_taken_from_main_product_not_related_cards(self):
         html = '''
@@ -459,6 +459,172 @@ class ParserTests(unittest.TestCase):
         variant = scraper.Variant(product=product, option_values={}, sku="1", title=product.title, image="x")
         value = scraper.infer_required_value("FH", product, variant, {}, FakeSchema(), {})
         self.assertEqual(value, "No")
+
+
+    def test_regulated_consumables_are_rejected(self):
+        class FakeSchema:
+            category_names = {"13020": "Collectible Figurines"}
+        for title in (
+            "ГЮЛОВА РАКИЯ 100 МЛ",
+            "ЛИКЬОР ОТ РОЗИ 100 МЛ",
+            "НАТУРАЛНО СЛАДКО ОТ РОЗИ 20 МЛ",
+            "БИО НАТУРАЛНА РОЗОВА ВОДА 100 МЛ",
+            "НАТУРАЛНО ЛАВАНДУЛОВО МАСЛО 10 МЛ",
+            "СУВЕНИРНА КАРТИЧКА С ПАРФЮМ БЪЛГАРСКА РОЗА",
+            "КРЕМ ЗА РЪЦЕ РОЗА 75 МЛ",
+        ):
+            product = scraper.Product(url="https://oreshak.bg/x", source_category_url="https://oreshak.bg/suveniri", title=title)
+            _, _, confidence = scraper.category_for(product, {}, FakeSchema())
+            self.assertEqual(confidence, "low", title)
+
+    def test_smoking_accessories_are_rejected(self):
+        class FakeSchema:
+            category_names = {"12179": "Decorative Boxes"}
+        for title in ("ХУМИДОР ЗА ПУРИ С ВЛАГОМЕР", "ПОДАРЪЧЕН КОМПЛЕКТ БЕНЗИНОВА ЗАПАЛКА"):
+            product = scraper.Product(url="https://oreshak.bg/x", source_category_url="https://oreshak.bg/kutii-za-aksesoari", title=title)
+            _, _, confidence = scraper.category_for(product, {}, FakeSchema())
+            self.assertEqual(confidence, "low", title)
+
+    def test_belts_sheaths_and_jewelry_are_rejected(self):
+        class FakeSchema:
+            category_names = {"10059": "Chef Knives", "13020": "Collectible Figurines"}
+        cases = [
+            ("МЪЖКИ КОЛАН ОТ КОЖА", "https://oreshak.bg/nojove-ot-balgaria"),
+            ("КОЖЕНА КАНИЯ ЗА НОЖ 30 СМ", "https://oreshak.bg/nojove-ot-balgaria"),
+            ("РЪЧНО ИЗРАБОТЕНО КОЛИЕ ОТ МЪНИСТА", "https://oreshak.bg/suveniri"),
+            ("РЪЧНО ИЗРАБОТЕНА ГРИВНА ОТ МЪНИСТА", "https://oreshak.bg/suveniri"),
+        ]
+        for title, url in cases:
+            product = scraper.Product(url="https://oreshak.bg/x", source_category_url=url, title=title)
+            _, _, confidence = scraper.category_for(product, {}, FakeSchema())
+            self.assertEqual(confidence, "low", title)
+
+    def test_functional_home_items_are_not_figurines(self):
+        class FakeSchema:
+            category_names = {"12140": "Collectible Figurines"}
+        for title in ("ДЪРВЕН СТЕНЕН ЧАСОВНИК УНИКАТ", "СТОЙКА ЗА КЛЮЧОВЕ", "ДЪРВЕНА АРТ ЗАКАЧАЛКА"):
+            product = scraper.Product(url="https://oreshak.bg/x", source_category_url="https://oreshak.bg/dyalani-unikati-ot-darvo", title=title)
+            _, _, confidence = scraper.category_for(product, {}, FakeSchema())
+            self.assertEqual(confidence, "low", title)
+
+    def test_unsupported_kitchen_items_are_rejected(self):
+        class FakeSchema:
+            category_names = {"9923": "Tool & Gadget Sets"}
+        for title in ("ДЪРВЕНА ТОЧИЛКА", "ХАВАНЧЕ ЗА ПОДПРАВКИ", "ДЪРВЕНА ХАЛБА", "СТОМАНЕН ШИШ", "ДЪРВЕНА КУПА"):
+            product = scraper.Product(url="https://oreshak.bg/x", source_category_url="https://oreshak.bg/kuhnenski-aksesoari-ot-darvo-Oreshak", title=title)
+            _, _, confidence = scraper.category_for(product, {}, FakeSchema())
+            self.assertEqual(confidence, "low", title)
+
+    def test_kitchen_spoon_and_board_map_explicitly(self):
+        class FakeSchema:
+            category_names = {"9999": "Cooking Spoons", "54423": "Serving Boards", "9923": "Tool & Gadget Sets"}
+        spoon = scraper.Product(url="https://oreshak.bg/s", source_category_url="https://oreshak.bg/kuhnenski-aksesoari-ot-darvo-Oreshak", title="ДЪРВЕНА ЛЪЖИЧКА ЗА МЕД")
+        board = scraper.Product(url="https://oreshak.bg/b", source_category_url="https://oreshak.bg/kuhnenski-aksesoari-ot-darvo-Oreshak", title="ПРЕМИУМ КУХНЕНСКА ДЪСКА ОТ БУК")
+        self.assertEqual(scraper.category_for(spoon, {}, FakeSchema())[0:3:2], ("9999", "high"))
+        self.assertEqual(scraper.category_for(board, {}, FakeSchema())[0:3:2], ("54423", "high"))
+
+    def test_single_wine_stopper_is_rejected(self):
+        class FakeSchema:
+            category_names = {"39880": "Gift Boxes", "10875": "Wine Accessory Sets"}
+        product = scraper.Product(url="https://oreshak.bg/x", source_category_url="https://oreshak.bg/kutii-za-vino-i-bijuta", title="ЗАПУШАЛКА ЗА БУТИЛКА ВИНО ОТ ЕЛЕНОВ РОГ")
+        _, reason, confidence = scraper.category_for(product, {}, FakeSchema())
+        self.assertEqual(confidence, "low")
+        self.assertIn("stopper", reason)
+
+    def test_unknown_product_in_heterogeneous_source_requires_explicit_rule(self):
+        class FakeSchema:
+            category_names = {"13020": "Collectible Figurines"}
+        product = scraper.Product(url="https://oreshak.bg/x", source_category_url="https://oreshak.bg/suveniri", title="НЕОБИЧАЕН ПРЕДМЕТ")
+        _, reason, confidence = scraper.category_for(product, {}, FakeSchema())
+        self.assertEqual(confidence, "low")
+        self.assertIn("explicit safe product rule", reason)
+
+    def test_real_household_knife_maps_high_confidence(self):
+        class FakeSchema:
+            category_names = {"10059": "Chef Knives", "10072": "Utility Knives"}
+        product = scraper.Product(url="https://oreshak.bg/x", source_category_url="https://oreshak.bg/nojove-ot-balgaria", title="ДОМАКИНСКИ НОЖ ЗА СИРЕНА")
+        category_id, _, confidence = scraper.category_for(product, {}, FakeSchema())
+        self.assertEqual(category_id, "10059")
+        self.assertEqual(confidence, "high")
+
+    def test_knife_surface_finish_defaults_to_polishing(self):
+        class FakeSchema:
+            headers = {"GT": "1081 - Surface Finishing Type"}
+            internal_keys = {"GT": "t_3_Surface Finishing Type"}
+            @staticmethod
+            def dropdown_for(column, category_id, row):
+                return ["Matte", "Polishing", "Hammered"]
+        product = scraper.Product(url="https://oreshak.bg/x", source_category_url="https://oreshak.bg/nojove-ot-balgaria", title="ДОМАКИНСКИ НОЖ", category_id="10059")
+        variant = scraper.Variant(product=product, option_values={}, sku="1", title=product.title, image="x")
+        self.assertEqual(scraper.infer_required_value("GT", product, variant, {}, FakeSchema(), {}), "Polishing")
+        self.assertTrue(any("Surface finishing" in warning for warning in product.warnings))
+
+    def test_forged_knife_surface_finish_maps_to_hammered(self):
+        class FakeSchema:
+            headers = {"GT": "1081 - Surface Finishing Type"}
+            internal_keys = {"GT": "t_3_Surface Finishing Type"}
+            @staticmethod
+            def dropdown_for(column, category_id, row):
+                return ["Matte", "Polishing", "Hammered"]
+        product = scraper.Product(url="https://oreshak.bg/x", source_category_url="https://oreshak.bg/nojove-ot-balgaria", title="РЪЧНО КОВАН ЛОВЕН НОЖ", category_id="10072")
+        variant = scraper.Variant(product=product, option_values={}, sku="1", title=product.title, image="x")
+        self.assertEqual(scraper.infer_required_value("GT", product, variant, {}, FakeSchema(), {}), "Hammered")
+
+    def test_horn_handle_uses_traceable_review_fallback(self):
+        class FakeSchema:
+            headers = {"LV": "7307 - Handle Material"}
+            internal_keys = {"LV": "t_3_Handle Material"}
+            @staticmethod
+            def dropdown_for(column, category_id, row):
+                return ["Metal", "Wooden handle", "Resin"]
+        product = scraper.Product(url="https://oreshak.bg/x", source_category_url="https://oreshak.bg/nojove-ot-balgaria", title="ЛОВЕН НОЖ С ДРЪЖКА ОТ ЕЛЕНОВ РОГ", category_id="10072")
+        variant = scraper.Variant(product=product, option_values={}, sku="1", title=product.title, image="x")
+        self.assertEqual(scraper.infer_required_value("LV", product, variant, {}, FakeSchema(), {}), "Resin")
+        self.assertTrue(any("horn/bone" in warning for warning in product.warnings))
+
+    def test_missing_description_is_generated_from_published_data(self):
+        product = scraper.Product(
+            url="https://oreshak.bg/x",
+            source_category_url="https://oreshak.bg/kutii-za-aksesoari",
+            title="ДЪРВЕНА КУТИЯ ЗА БИЖУТА",
+            code="6360",
+            attributes={"Материал": "Дърво", "Размер": "20 x 15 x 10 см"},
+        )
+        self.assertTrue(scraper.ensure_product_description(product))
+        self.assertIn("ДЪРВЕНА КУТИЯ ЗА БИЖУТА", product.description)
+        self.assertIn("Материал: Дърво", product.description)
+        self.assertTrue(product.warnings)
+
+
+    def test_material_word_does_not_trigger_matte_finish(self):
+        class FakeSchema:
+            headers = {"GT": "1081 - Surface Finishing Type"}
+            internal_keys = {"GT": "t_3_Surface Finishing Type"}
+            @staticmethod
+            def dropdown_for(column, category_id, row):
+                return ["Matte", "Polishing", "Hammered"]
+        product = scraper.Product(url="https://oreshak.bg/x", source_category_url="https://oreshak.bg/nojove-ot-balgaria", title="ДОМАКИНСКИ НОЖ", description="Материал: стомана.", category_id="10059")
+        variant = scraper.Variant(product=product, option_values={}, sku="1", title=product.title, image="x")
+        self.assertEqual(scraper.infer_required_value("GT", product, variant, {}, FakeSchema(), {}), "Polishing")
+
+    def test_white_blank_board_keeps_art_board_mapping(self):
+        class FakeSchema:
+            category_names = {"39981": "Wood Art Boards", "12193": "Decorative Plaques"}
+        product = scraper.Product(url="https://oreshak.bg/x", source_category_url="https://oreshak.bg/Wooden-souvenirs-white-blank", title="СУВЕНИРНА ДЪСКА ЗА ДЕКУПАЖ НА БЯЛА ЗАГОТОВКА")
+        category_id, _, confidence = scraper.category_for(product, {}, FakeSchema())
+        self.assertEqual(category_id, "39981")
+        self.assertEqual(confidence, "high")
+
+
+    def test_wooden_source_category_supports_board_material_when_page_omits_it(self):
+        product = scraper.Product(
+            url="https://oreshak.bg/kuhnenski-aksesoari-ot-darvo-Oreshak/board",
+            source_category_url="https://oreshak.bg/kuhnenski-aksesoari-ot-darvo-Oreshak",
+            source_category_name="КУХНЕНСКИ АКСЕСОАРИ ОТ ДЪРВО",
+            title="ПРОФЕСИОНАЛНА ДЪСКА ЗА РЯЗАНЕ НА ХЛЯБ",
+            description="Размери: 47.5/23/2.5 см.",
+        )
+        self.assertEqual(scraper.detect_material_candidates(product)[0], "Wood")
 
 
 if __name__ == "__main__":

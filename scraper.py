@@ -41,7 +41,7 @@ NS_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 NS_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 NS_XML = "http://www.w3.org/XML/1998/namespace"
 NS = {"a": NS_MAIN, "r": NS_REL}
-PROJECT_VERSION = "6.3"
+PROJECT_VERSION = "6.4"
 MAX_TEMU_ROWS = 2000
 
 SOURCE_DEFAULTS: dict[str, str] = {
@@ -74,19 +74,19 @@ KEYWORD_CATEGORY_RULES: list[tuple[re.Pattern[str], str, str]] = [
     (re.compile(r"(висулк|пендант|pendant)"), "13027", "pendant ornament"),
     (re.compile(r"(кутия).*(бижут)|бижут.*кутия"), "12735", "jewelry box"),
     (re.compile(r"(кутия|кашон).*(подар|gift)"), "39880", "gift box"),
-    (re.compile(r"(стойка|рафт).*(вино|бутил)"), "12686", "wine rack"),
+    (re.compile(r"(стойка|поставка|рафт).*(вино|бутил)"), "12686", "wine rack"),
     (re.compile(r"(кутия).*(вино|бутил)"), "39880", "wine gift box"),
     (re.compile(r"\bбуре|бъчв"), "10905", "barrel"),
     (re.compile(r"бъклиц|манерк|кег"), "10888", "flask/keg"),
     (re.compile(r"(трофе|глиги|сръндак|глиган|елен).*(дъск|поставка)|дъск.*трофе"), "32650", "trophy mount"),
-    (re.compile(r"(шахматен часовник|фигури за шах|пулове|зарове|зарчета|аксесоар.*шах|аксесоар.*табла)"), "25613", "game pieces/accessories"),
+    (re.compile(r"(шахматен часовник|фигури за шах|пулове|\bзар\b|зарове|зарчета|аксесоар.*шах|аксесоар.*табла)"), "25613", "game pieces/accessories"),
     (re.compile(r"(комплект|сет).*(шах|табла)|шах.*табла"), "25615", "board game"),
     (re.compile(r"професионален.*шах|шахмат.*професион"), "51777", "professional chess"),
     (re.compile(r"(солниц|соларник|salt cellar|salt box)"), "10703", "salt cellar/serveware accessory"),
     (re.compile(r"(черпак|черпало)"), "9998", "ladle"),
-    (re.compile(r"(лъжиц|шпатула)"), "9999", "cooking spoon"),
+    (re.compile(r"(лъжиц|лъжич|шпатула)"), "9999", "cooking spoon"),
     (re.compile(r"(комплект|сет).*(прибор|кухненск|лъжиц|шпатула)"), "10006", "utensil set"),
-    (re.compile(r"(дъска).*(рязане|сервира|мезе|сирена)|serving board"), "54423", "serving board"),
+    (re.compile(r"(?:дъска).*(?:рязане|сервира|мезе|сирена|кухнен|домаш|гурме)|(?:кухнен|домаш|гурме).*(?:дъска)|(?:тал[аъ]р)|serving board"), "54423", "serving board"),
     (re.compile(r"\bподнос|tray"), "10741", "serving tray"),
     (re.compile(r"\bплато|platter"), "10740", "platter"),
     (re.compile(r"чини(я|и).*(пирограф|фолклор|сувенир|закач)|(?:пирограф|фолклор|сувенир).*(чини(я|и))"), "10853", "novelty/decorative plate"),
@@ -94,12 +94,16 @@ KEYWORD_CATEGORY_RULES: list[tuple[re.Pattern[str], str, str]] = [
     (re.compile(r"\bчини(я|и)|plate"), "10808", "dinner plate"),
     (re.compile(r"(поставка|органайзер).*(нож|прибор)"), "10328", "utensil rack"),
     (re.compile(r"(нож).*(хранене|масов)"), "10638", "dinner knife"),
-    (re.compile(r"(нож).*(плод|универсал|ловен)|\bловен нож"), "10072", "utility knife"),
-    (re.compile(r"(кухненски нож|готварски нож|нож.*готвач|сатър|chef)"), "10059", "chef knife"),
+    (re.compile(r"(нож).*(плод|универсал|ловен|турист|спортен|джоб)|\b(?:ловен|туристически|спортен) нож"), "10072", "utility knife"),
+    (re.compile(r"(кухненски нож|готварски нож|домакински нож|домашен нож|нож.*(?:готвач|сирена)|касапски нож|сатър|chef)"), "10059", "chef knife"),
     (re.compile(r"(кутия).*(нож|аксесоар|пура|тютюн)"), "12179", "decorative box"),
     (re.compile(r"(отварачка).*(вино|тирбушон)"), "10875", "wine accessory"),
     (re.compile(r"(отварачка|gadget)"), "9923", "kitchen gadget"),
-    (re.compile(r"(табел|надпис|плакет|plaque)"), "12193", "decorative plaque"),
+    (re.compile(r"(табел|надпис|плакет|plaque|дъска.*послание)"), "12193", "decorative plaque"),
+    (re.compile(r"(доза|кутия).*(подправк)"), "10703", "spice container/serveware accessory"),
+    (re.compile(r"(звънче|хлопка)"), "12141", "hanging bell ornament"),
+    (re.compile(r"\bскрин\b"), "12179", "decorative storage box"),
+    (re.compile(r"(керамичн).*(слон|цървул)|(?:слонче|цървулк).*(керами)"), "12140", "ceramic collectible figurine"),
     (re.compile(r"(пано|пластик|релеф|дърворезб)"), "12151", "wall sculpture"),
     (re.compile(r"(картина|живопис|painting)"), "12867", "painting"),
     (re.compile(r"(гравюра|дърворит|woodcut)"), "39291", "woodcut"),
@@ -112,21 +116,64 @@ KEYWORD_CATEGORY_RULES: list[tuple[re.Pattern[str], str, str]] = [
 ]
 
 LOW_CONFIDENCE_PRODUCT_RULES: list[tuple[re.Pattern[str], str]] = [
+    # Consumables and regulated goods are intentionally excluded because the
+    # user-supplied Temu template has no matching food, alcohol, cosmetic or
+    # fragrance categories.
+    (re.compile(r"(?:гюлова|сливова|стара\s+сливова|кумова)\s+ракия|\bликьор\b|\bалкохол", re.I), "alcohol is outside the categories in the supplied Temu template"),
+    (re.compile(r"\b(?:сладко|конфитюр|мармалад)\b", re.I), "food is outside the categories in the supplied Temu template"),
+    (re.compile(r"(?:розова|лавандулова)\s+вода", re.I), "floral/cosmetic water is outside the categories in the supplied Temu template"),
+    (re.compile(r"етеричн(?:о|и|а)\s+масл|(?:розово|лавандулово)\s+масло|масло\s+от\s+(?:роза|лавандула)", re.I), "essential oil is outside the categories in the supplied Temu template"),
+    (re.compile(r"\bпарфюм\b|крем\s+за\s+ръце|\bкозмет", re.I), "perfume/cosmetic product is outside the categories in the supplied Temu template"),
+
+    # Smoking, apparel and personal-accessory products must not inherit a box,
+    # knife or figurine category simply because of their source section.
+    (re.compile(r"хумидор|запалка|калъф.*тютюн|кутия.*пур", re.I), "no safe smoking-accessory category exists in the supplied Temu template"),
+    (re.compile(r"\bколан\b|\bпафти?\b", re.I), "no belt/apparel-accessory category exists in the supplied Temu template"),
+    (re.compile(r"^(?:кожена\s+)?кания\b|^калъф\s+за\s+нож\b|\bножница\b", re.I), "knife sheath is not a knife and no sheath category exists in the supplied Temu template"),
+    (re.compile(r"\b(?:колие|гривна|обици)\b", re.I), "no jewelry category exists in the supplied Temu template"),
+
+    # Functional home/kitchen objects for which the supplied template has no
+    # defensible leaf category.
+    (re.compile(r"стенен\s+часовник|часовников\s+механизъм", re.I), "no wall-clock category exists in the supplied Temu template"),
+    (re.compile(r"стойка\s+за\s+ключове|\bзакачалка\b", re.I), "no key-holder/coat-hook category exists in the supplied Temu template"),
+    (re.compile(r"\bточилка\b|\bхаван(?:че)?\b|\bхалба\b|\bюзче\b|\bшиш(?:ове)?\b|\bщипки\b", re.I), "no safe category for this kitchen utensil exists in the supplied Temu template"),
+    (re.compile(r"\bкупа\b|\bкупичка\b|\bгаванка\b", re.I), "no bowl category exists in the supplied Temu template"),
+    (re.compile(r"запушалка.*(?:вино|бутилка)|(?:вино|бутилка).*запушалка", re.I), "single bottle stopper is not a Wine Accessory Set"),
+    (re.compile(r"отварачка.*бира", re.I), "single beer opener has no safe category in the supplied Temu template"),
+    (re.compile(r"бутилка\s+уникат|буркан.*ваза", re.I), "decorative bottle/vase has no safe category in the supplied Temu template"),
+    (re.compile(r"поставка\s+за\s+химикалки|\bмоливник\b", re.I), "no pen-holder category exists in the supplied Temu template"),
+    (re.compile(r"\b(?:меч|сабя|каракулак)\b", re.I), "sword/sabre product is not covered by the supplied kitchen-knife categories"),
+
+    # Previously identified unsupported products.
     (re.compile(r"бъклиц|манерк|hip\s*flask", re.I), "no flask/drinkware category exists in the supplied Temu template"),
     (re.compile(r"покривк|tablecloth|чорап|терлиц|пафт", re.I), "finished table linen/apparel is not raw Fabric and no suitable category exists in the supplied Temu template"),
     (re.compile(r"подков|horseshoe", re.I), "no safe horseshoe/decorative-hardware category exists in the supplied Temu template"),
     (re.compile(r"пепелник|ashtray", re.I), "no ashtray category exists in the supplied Temu template"),
     (re.compile(r"възглавничк|cushion|pillow", re.I), "no cushion category exists in the supplied Temu template"),
     (re.compile(r"фиолк.*есенц|есенц.*лавандул|fragrance vial", re.I), "no fragrance/essential-oil category exists in the supplied Temu template"),
-    (re.compile(r"лъжиц.*(?:танц|хоро)|(?:танц|хоро).*лъжиц", re.I), "folk-dance prop is not a cooking spoon"),
+    (re.compile(r"лъжиц.*(?:танц|хоро)|(?:танц|хоро).*лъжиц|лъжич.*сватб", re.I), "ceremonial/folk prop is not a cooking spoon"),
 ]
+
+# These source sections contain many unrelated product types. A source-category
+# default is therefore unsafe unless the title matched a specific rule above.
+STRICT_EXPLICIT_MAPPING_SLUGS: set[str] = {
+    "dyalani-unikati-ot-darvo",
+    "kuhnenski-aksesoari-ot-darvo-oreshak",
+    "nojove-ot-balgaria",
+    "kutii-za-vino-i-bijuta",
+    "suveniri",
+    "suveniri-ot-oreshak",
+    "suveniri-ot-metal",
+}
 
 MATERIAL_TRANSLATIONS: list[tuple[re.Pattern[str], list[str]]] = [
     (re.compile(r"\bкост\b|bone"), ["Bone"]),
     (re.compile(r"дамаск"), ["Damascus Steel", "Stainless Steel", "Steel"]),
     (re.compile(r"неръждаем"), ["Stainless Steel", "Steel"]),
     (re.compile(r"желяз|\biron\b"), ["Iron", "Cast Iron", "Metal", "Steel"]),
-    (re.compile(r"стоман"), ["High carbon steel", "Carbon Steel", "Steel", "Stainless Steel"]),
+    (re.compile(r"високовъглерод"), ["High carbon steel", "Carbon Steel", "Steel"]),
+    (re.compile(r"въглерод"), ["Carbon Steel", "High carbon steel", "Steel"]),
+    (re.compile(r"стоман"), ["Steel", "Carbon Steel", "Stainless Steel"]),
     (re.compile(r"месинг"), ["Brass", "Copper Alloy", "Metal"]),
     (re.compile(r"медн|\bмед\b"), ["Copper", "Copper Alloy", "Metal"]),
     (re.compile(r"алумини"), ["Aluminum Alloy", "Aluminum", "Metal"]),
@@ -1198,7 +1245,13 @@ def detect_material_candidates(product: Product, food_contact: bool = False) -> 
         product.attributes.get("Материал", ""),
         product.attributes.get("Дърво", ""),
     ])).casefold()
-    full_text = normalize_space(" ".join([product.title, product.description, *product.attributes.values()])).casefold()
+    full_text = normalize_space(" ".join([
+        product.title,
+        product.description,
+        product.source_category_name,
+        slug_key(product.source_category_url),
+        *product.attributes.values(),
+    ])).casefold()
     candidates: list[str] = []
 
     # Explicit "Материал:" text and structured source attributes take priority
@@ -1219,6 +1272,34 @@ def detect_material_candidates(product: Product, food_contact: bool = False) -> 
     return dedupe(candidates)
 
 
+def ensure_product_description(product: Product) -> bool:
+    """Create a source-grounded description when the product page has none.
+
+    The fallback uses only the published title, code, bullet points and
+    attributes; it does not invent marketing claims. Returns True when a
+    fallback was created so the row can be marked REVIEW.
+    """
+    if normalize_space(product.description):
+        product.description = normalize_space(product.description)
+        return False
+    parts: list[str] = []
+    if normalize_space(product.title):
+        parts.append(normalize_space(product.title).rstrip(". ") + ".")
+    if normalize_space(product.code):
+        parts.append(f"Код на продукта: {normalize_space(product.code)}.")
+    for bullet in product.bullet_points[:6]:
+        value = normalize_space(bullet)
+        if value:
+            parts.append(value.rstrip(". ") + ".")
+    for key, value in list(product.attributes.items())[:12]:
+        key_n, value_n = normalize_space(key), normalize_space(value)
+        if key_n and value_n:
+            parts.append(f"{key_n}: {value_n}.")
+    product.description = normalize_space(" ".join(parts)) or "Информацията за продукта не е публикувана."
+    product.warnings.append("Product description generated from the published title/code/attributes because the source description is empty")
+    return True
+
+
 def category_for(product: Product, overrides: Mapping[str, str], schema: TemplateSchema) -> tuple[str, str, str]:
     if product.code in overrides:
         return overrides[product.code], "override by product code", "high"
@@ -1234,8 +1315,11 @@ def category_for(product: Product, overrides: Mapping[str, str], schema: Templat
     for pattern, category_id, reason in KEYWORD_CATEGORY_RULES:
         if pattern.search(title_only) and category_id in schema.category_names:
             return category_id, reason, "high"
-    default = SOURCE_DEFAULTS.get(slug_key(product.source_category_url), "13020")
-    return default, f"source category default: {slug_key(product.source_category_url)}", "medium"
+    source_slug = slug_key(product.source_category_url)
+    default = SOURCE_DEFAULTS.get(source_slug, "13020")
+    if source_slug in STRICT_EXPLICIT_MAPPING_SLUGS:
+        return default, f"no explicit safe product rule for heterogeneous source category: {source_slug}", "low"
+    return default, f"source category default: {source_slug}", "medium"
 
 
 def load_overrides(path: Path) -> dict[str, str]:
@@ -1402,6 +1486,58 @@ def infer_required_value(column: str, product: Product, variant: Variant, row: d
     if column == "TF": return normalize_space(config.get("eu_responsible_person"))
     if column == "PF": return variation_fields(variant, schema).get("PF")
 
+    if "Surface Finishing Type" in header:
+        candidates: list[str] = []
+        if re.search(r"\bматов(?:а|о|и)?\b|\bmatte\b", text, re.I):
+            candidates.append("Matte")
+        if "полир" in text or "polish" in text:
+            candidates.append("Polishing")
+        if "четкан" in text or "brushed" in text:
+            candidates.append("Brushed")
+        if "прахов" in text:
+            candidates.append("Powder Coating")
+        if "боядис" in text or "painted" in text:
+            candidates.append("Painted")
+        if "лазер" in text and "грав" in text:
+            candidates.append("Laser Engraving")
+        if "кован" in text or "hammered" in text:
+            candidates.append("Hammered")
+        if not candidates and category_id in {"10059", "10072", "10638"}:
+            candidates.append("Polishing")
+            product.warnings.append("Surface finishing is not published; Polishing selected as the Temu-required knife fallback")
+        return choose_valid(dropdown, candidates, fallback_first=False)
+    if "Blade Material" in header:
+        candidates: list[str] = []
+        if "дамаск" in text:
+            candidates.append("Damascus Steel")
+        if "неръждаем" in text:
+            candidates.append("Stainless Steel")
+        if "високовъглерод" in text or "въглерод" in text:
+            candidates.append("Carbon")
+        if "стоман" in text:
+            candidates.extend(["Steel", "Alloy"])
+        if not candidates:
+            candidates.append("Steel")
+            product.warnings.append("Blade material is not published; Steel selected as the Temu-required knife fallback")
+        return choose_valid(dropdown, candidates, fallback_first=False)
+    if "Handle Material" in header:
+        if any(token in text for token in ("дърв", "бук", "орех", "дъб", "ясен", "махагон")):
+            candidates = ["Wooden handle"]
+        elif any(token in text for token in ("пластмас", "plastic")):
+            candidates = ["Plastic"]
+        elif any(token in text for token in ("смол", "resin")):
+            candidates = ["Resin"]
+        elif any(token in text for token in ("еленов рог", "рог", "кост")):
+            candidates = ["Resin"]
+            product.warnings.append("Temu handle-material dropdown has no horn/bone option; Resin selected as the closest permitted value for manual review")
+        elif "неръждаем" in text:
+            candidates = ["Stainless Steel", "Metal"]
+        elif any(token in text for token in ("стоман", "метал")):
+            candidates = ["Metal", "Steel"]
+        else:
+            candidates = ["Resin"]
+            product.warnings.append("Handle material is not published; Resin selected as the Temu-required fallback for manual review")
+        return choose_valid(dropdown, candidates, fallback_first=False)
     if "Material Type" in header:
         return choose_valid(dropdown, ["Textile Material", "Non-textile Material"], fallback_first=False)
     if column in {"DS", "DT", "DU", "FO", "FP", "FQ"} or "Material" in header:
@@ -1693,6 +1829,8 @@ def build_row(variant: Variant, schema: TemplateSchema, config: Mapping[str, Any
             continue
         if row.get(column) in (None, ""):
             errors.append(f"Missing required {column} ({schema.headers.get(column, '')})")
+    if not normalize_space(product.description):
+        errors.append("No product description")
     if not product.images:
         errors.append("No gallery images")
     if product.price_eur is None:
@@ -1887,6 +2025,7 @@ def main() -> int:
             logging.info("Product %s/%s: %s", index, len(discovered), url)
             try:
                 product = client.parse_product(url, category_url)
+                ensure_product_description(product)
                 product.category_id, product.mapping_reason, product.mapping_confidence = category_for(product, overrides, schema)
                 if product.mapping_confidence != "high":
                     product.warnings.append(f"Category mapping {product.mapping_confidence}: {product.mapping_reason}")
