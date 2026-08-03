@@ -7,7 +7,7 @@ import scraper
 
 class ParserTests(unittest.TestCase):
     def test_project_version_matches_bundle(self):
-        self.assertEqual(scraper.PROJECT_VERSION, "6.4")
+        self.assertEqual(scraper.PROJECT_VERSION, "6.5")
 
     def test_price_is_taken_from_main_product_not_related_cards(self):
         html = '''
@@ -27,6 +27,29 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(list_price, Decimal("80.00"))
         self.assertIn("price-new", source)
         self.assertIn("price-old", list_source)
+
+
+    def test_main_price_nearest_cart_beats_unlabeled_focus_carousel(self):
+        html = """
+        <div id="content"><div class="product-right">
+          <div class="owl-carousel focus-products">
+            <ul class="list-unstyled"><li><h2 class="price">65.45 €</h2></li></ul>
+          </div>
+          <div class="main-product-panel">
+            <h1>КОМПЛЕКТ ШАХ И ТАБЛА БУК ПИРОГРАФ 48/48</h1>
+            <ul class="list-unstyled">
+              <li>Код на продукта: 5076</li>
+              <li><h2 class="price">81.81 €</h2></li>
+            </ul>
+            <button id="button-cart">Купи</button>
+          </div>
+        </div></div>
+        """
+        soup = BeautifulSoup(html, "lxml")
+        price, list_price, source, _ = scraper.OreshakClient._parse_prices(soup, {})
+        self.assertEqual(price, Decimal("81.81"))
+        self.assertIsNone(list_price)
+        self.assertIn("ul.list-unstyled h2", source)
 
     def test_hidden_checkout_price_beats_visible_old_price(self):
         html = '''

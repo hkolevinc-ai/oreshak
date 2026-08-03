@@ -41,7 +41,7 @@ NS_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 NS_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 NS_XML = "http://www.w3.org/XML/1998/namespace"
 NS = {"a": NS_MAIN, "r": NS_REL}
-PROJECT_VERSION = "6.4"
+PROJECT_VERSION = "6.5"
 MAX_TEMU_ROWS = 2000
 
 SOURCE_DEFAULTS: dict[str, str] = {
@@ -963,16 +963,38 @@ class OreshakClient:
             match = re.search(r"([0-9][0-9\s.,]*)\s*€", text)
             return safe_decimal(match.group(1)) if match else None
 
+        def proximity_to_cart(tag: Tag) -> int:
+            """Prefer a price located nearest to the main add-to-cart control.
+
+            Some Oreshak pages render unlabeled focus/recommendation carousels inside
+            the same broad product column.  Those blocks do not always use classes
+            such as ``related`` or ``product-thumb``.  A price in the real product
+            panel shares a much closer ancestor with ``#button-cart`` than a focus
+            card, so proximity is a safer tie-breaker than DOM order.
+            """
+            node: Tag | None = tag
+            for depth in range(10):
+                if node is None:
+                    break
+                if node.select_one("#button-cart, button[id*='cart'], input[id*='cart']"):
+                    return 1000 - depth * 50
+                node = node.parent if isinstance(node.parent, Tag) else None
+            return 0
+
         def first_value(selectors: Sequence[str]) -> tuple[Decimal | None, str]:
             for selector in selectors:
-                for tag in scope.select(selector):
+                candidates: list[tuple[int, int, Decimal]] = []
+                for order, tag in enumerate(scope.select(selector)):
                     if not isinstance(tag, Tag):
                         continue
                     if tag.find_parent(class_=re.compile(r"related|featured|product-grid|product-thumb", re.I)):
                         continue
                     value = value_from_tag(tag)
                     if value is not None:
-                        return value, f"main product selector: {selector}"
+                        candidates.append((proximity_to_cart(tag), -order, value))
+                if candidates:
+                    _, _, value = max(candidates, key=lambda item: (item[0], item[1]))
+                    return value, f"main product selector: {selector}"
             return None, ""
 
         # Highest priority: the add-to-cart price input used by the store itself.
