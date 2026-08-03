@@ -41,7 +41,7 @@ NS_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 NS_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 NS_XML = "http://www.w3.org/XML/1998/namespace"
 NS = {"a": NS_MAIN, "r": NS_REL}
-PROJECT_VERSION = "6.6"
+PROJECT_VERSION = "6.7"
 MAX_TEMU_ROWS = 2000
 
 SOURCE_DEFAULTS: dict[str, str] = {
@@ -1001,21 +1001,42 @@ class OreshakClient:
                     unique.append(value)
             return unique
 
-        def text_anchor(pattern: re.Pattern[str], exact_code: str = "") -> Tag | None:
-            fallback: Tag | None = None
+        def text_anchor(pattern: re.Pattern[str]) -> Tag | None:
             for text_node in broad_scope.find_all(string=pattern):
                 parent = text_node.parent if isinstance(text_node.parent, Tag) else None
-                if parent is None or excluded(parent):
-                    continue
-                if fallback is None:
-                    fallback = parent
-                if exact_code and exact_code in normalize_space(str(text_node)):
+                if parent is not None and not excluded(parent):
                     return parent
-            return fallback
+            return None
 
-        code_anchor = text_anchor(
-            re.compile(r"Код\s+на\s+продукта|Product\s+Code", re.I),
-            normalize_space(product_code),
+        def exact_product_code_anchor(exact_code: str) -> Tag | None:
+            """Return the smallest tag that contains the full code label and value.
+
+            On the live site the label and the numeric value can be separate text
+            nodes inside one ``li``.  Looking only at the individual text node
+            therefore loses the exact-code anchor and makes unrelated focus-product
+            prices look equally close.
+            """
+            exact_code = normalize_space(exact_code)
+            if not exact_code:
+                return None
+            combined = re.compile(
+                rf"(?:Код\s+на\s+продукта|Product\s+Code)\s*[:#]?\s*{re.escape(exact_code)}(?=$|\s|[^0-9A-Za-zА-Яа-я])",
+                re.I,
+            )
+            candidates: list[tuple[int, int, int, Tag]] = []
+            for tag in broad_scope.find_all(("li", "span", "p", "small", "strong", "td", "dd", "div")):
+                if not isinstance(tag, Tag) or excluded(tag):
+                    continue
+                text = normalize_space(tag.get_text(" ", strip=True))
+                if not combined.search(text):
+                    continue
+                descendant_tags = sum(1 for child in tag.descendants if isinstance(child, Tag))
+                depth = len(list(tag.parents))
+                candidates.append((len(text), descendant_tags, -depth, tag))
+            return min(candidates, key=lambda item: item[:3])[3] if candidates else None
+
+        code_anchor = exact_product_code_anchor(product_code) or text_anchor(
+            re.compile(r"Код\s+на\s+продукта|Product\s+Code", re.I)
         )
         cart_anchor = broad_scope.select_one(
             "#button-cart, button[id*='cart'], input[id*='cart'], button[name*='cart']"
@@ -1038,6 +1059,61 @@ class OreshakClient:
             "[itemprop='price'], .price-old, .old-price, del, s, "
             "ul.list-unstyled h2, .product-price h2, h2.price, .product-price, .price"
         )
+
+        def adjacent_code_price_values(anchor: Tag | None) -> tuple[list[Decimal], str]:
+            """Read the price block immediately preceding the exact code block.
+
+            The current Oreshak layout places the product price list and the
+            ``Код на продукта`` list in adjacent sibling containers.  A focus
+            product can be structurally closer in the ancestor tree, so tree
+            distance alone is not reliable.  The nearest preceding sibling with
+            EUR values is a much stronger live-page signal.
+            """
+            if anchor is None or not product_code:
+                return [], ""
+            current: Tag | None = anchor
+            for level in range(7):
+                parent = current.parent if isinstance(current, Tag) and isinstance(current.parent, Tag) else None
+                if parent is None:
+                    break
+                siblings = [child for child in parent.children if isinstance(child, Tag)]
+                try:
+                    index = siblings.index(current)
+                except ValueError:
+                    index = 0
+                # Nearby previous siblings are examined from nearest to farthest.
+                for offset, sibling in enumerate(reversed(siblings[:index]), start=1):
+                    if offset > 5 or excluded(sibling):
+                        continue
+                    sibling_text = normalize_space(sibling.get_text(" ", strip=True))
+                    if re.search(
+                        r"Продукти\s+на\s+фокус|Подобни\s+продукти|Related|Featured|Recommended",
+                        sibling_text,
+                        re.I,
+                    ):
+                        continue
+                    values = euro_values(sibling)
+                    if not values:
+                        continue
+                    # Product-card grids usually contain several outbound links;
+                    # the real price list is normally a compact ul/div without them.
+                    product_links = sibling.select(
+                        "a[href*='/product/'], a[href*='product_id='], .product-thumb a[href], .product-grid a[href]"
+                    )
+                    if len(product_links) > 1:
+                        continue
+                    unique: list[Decimal] = []
+                    for value in values:
+                        if value not in unique:
+                            unique.append(value)
+                    if unique:
+                        return unique, f"exact product-code adjacent price block (ancestor level {level}, previous sibling {offset})"
+                current = parent
+                if current is broad_scope:
+                    break
+            return [], ""
+
+        code_adjacent_values, code_adjacent_source = adjacent_code_price_values(code_anchor)
 
         def smallest_panel(anchor: Tag | None, companion: Tag | None) -> Tag | None:
             node = anchor
@@ -1147,18 +1223,30 @@ class OreshakClient:
             if list_price is not None else ""
         )
 
-        visible_tag, visible_selector = best_tag((
-            "ul.list-unstyled h2",
-            ".product-price h2",
-            "h2.price",
-            ".product-price",
-            ".price",
-        ))
-        visible_values = euro_values(visible_tag) if visible_tag is not None else []
+        # The exact-code adjacent block has priority over generic visible-price
+        # selectors.  This handles the live layout where current and old prices
+        # are in one ul and the code is in the next ul, while an unrelated focus
+        # price sits elsewhere in the same broad product-right column.
+        if code_adjacent_values:
+            visible_values = code_adjacent_values
+            visible_source = code_adjacent_source
+        else:
+            visible_tag, visible_selector = best_tag((
+                "ul.list-unstyled h2",
+                ".product-price h2",
+                "h2.price",
+                ".product-price",
+                ".price",
+            ))
+            visible_values = euro_values(visible_tag) if visible_tag is not None else []
+            visible_source = (
+                f"anchored main product selector: {visible_selector}"
+                if visible_values else ""
+            )
+
         if visible_values:
             visible_current = min(visible_values)
             visible_regular = max(visible_values)
-            visible_source = f"anchored main product selector: {visible_selector}"
             if price is None:
                 price = visible_current
                 price_source = visible_source

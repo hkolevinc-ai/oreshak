@@ -7,7 +7,7 @@ import scraper
 
 class ParserTests(unittest.TestCase):
     def test_project_version_matches_bundle(self):
-        self.assertEqual(scraper.PROJECT_VERSION, "6.6")
+        self.assertEqual(scraper.PROJECT_VERSION, "6.7")
 
     def test_price_is_taken_from_main_product_not_related_cards(self):
         html = '''
@@ -76,7 +76,31 @@ class ParserTests(unittest.TestCase):
         )
         self.assertEqual(price, Decimal("73.63"))
         self.assertEqual(list_price, Decimal("81.81"))
-        self.assertIn("anchored main product selector", source)
+        self.assertTrue("anchored main product selector" in source or "exact product-code adjacent price block" in source)
+        self.assertIn("pre-promotion", list_source)
+
+    def test_live_layout_adjacent_price_list_beats_structurally_closer_focus_price(self):
+        html = """
+        <div id="content"><div class="product-right">
+          <div class="focus-panel"><h2 class="price">65.45 €</h2></div>
+          <ul class="list-unstyled product-main-price">
+            <li><h2>73.63 € (144.00 лв.)</h2></li>
+            <li><h4><span>81.81 € (160.00 лв.)</span></h4></li>
+          </ul>
+          <ul class="list-unstyled product-code-list">
+            <li><span>Код на продукта:</span> <strong>5076</strong></li>
+            <li>Безплатна Доставка</li>
+          </ul>
+          <div id="product"><button id="button-cart">Неналичен</button></div>
+        </div></div>
+        """
+        soup = BeautifulSoup(html, "lxml")
+        price, list_price, source, list_source = scraper.OreshakClient._parse_prices(
+            soup, {}, "5076", "КОМПЛЕКТ ШАХ И ТАБЛА БУК ПИРОГРАФ 48/48"
+        )
+        self.assertEqual(price, Decimal("73.63"))
+        self.assertEqual(list_price, Decimal("81.81"))
+        self.assertIn("exact product-code adjacent price block", source)
         self.assertIn("pre-promotion", list_source)
 
     def test_product_code_distance_beats_unrelated_h2_when_common_parent_contains_cart(self):
