@@ -41,7 +41,7 @@ NS_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 NS_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 NS_XML = "http://www.w3.org/XML/1998/namespace"
 NS = {"a": NS_MAIN, "r": NS_REL}
-PROJECT_VERSION = "6.5"
+PROJECT_VERSION = "6.6"
 MAX_TEMU_ROWS = 2000
 
 SOURCE_DEFAULTS: dict[str, str] = {
@@ -625,7 +625,7 @@ class OreshakClient:
             product.list_price_eur,
             product.price_source,
             product.list_price_source,
-        ) = self._parse_prices(soup, json_ld)
+        ) = self._parse_prices(soup, json_ld, product.code, product.title)
         product.in_stock, product.stock_source, product.stock_quantity = self._parse_stock(soup, json_ld)
         product.options = self._parse_options(soup)
         source_text = product.description + " " + " ".join(product.attributes.values())
@@ -944,74 +944,234 @@ class OreshakClient:
 
     @classmethod
     def _parse_prices(
-        cls, soup: BeautifulSoup, json_ld: Mapping[str, Any]
+        cls,
+        soup: BeautifulSoup,
+        json_ld: Mapping[str, Any],
+        product_code: str = "",
+        title_hint: str = "",
     ) -> tuple[Decimal | None, Decimal | None, str, str]:
-        scope = cls._main_product_scope(soup)
+        """Extract the current and genuine pre-promotion prices from the main product panel.
 
-        def value_from_tag(tag: Tag) -> Decimal | None:
-            # The live Oreshak theme exposes the actual discounted price in a hidden
-            # input, while the visible h2 can contain the crossed-out list price.
+        Oreshak renders a broad ``.product-right`` column that can also contain
+        "Продукти на фокус".  Those cards may use the same ``h2.price`` markup as
+        the real product.  Therefore DOM order and proximity to the cart button are
+        not sufficient.  The parser first isolates the smallest panel containing
+        the current product code (or title) together with the add-to-cart control,
+        then ranks price candidates by their distance to those anchors.
+        """
+        broad_scope = cls._main_product_scope(soup)
+        excluded_re = re.compile(
+            r"(?:^|[-_\s])(?:related(?:-products?)?|featured(?:-products?)?|"
+            r"product-grid|product-thumb|focus-products?|recommendations?|"
+            r"similar-products?|also-(?:bought|like)|cross-sell|up-sell|"
+            r"owl-carousel|swiper)(?:$|[-_\s])|carousel.*product|product.*carousel",
+            re.I,
+        )
+
+        def excluded(tag: Tag) -> bool:
+            return bool(
+                tag.find_parent(class_=excluded_re)
+                or tag.find_parent(id=excluded_re)
+                or (tag.get("class") and excluded_re.search(" ".join(tag.get("class") or [])))
+                or (tag.get("id") and excluded_re.search(str(tag.get("id"))))
+            )
+
+        def euro_values(tag: Tag) -> list[Decimal]:
+            values: list[Decimal] = []
             for attr in ("value", "content", "data-price", "data-special"):
                 raw = tag.get(attr)
-                if raw not in (None, ""):
-                    currency = normalize_space(tag.get("currency") or tag.get("data-currency") or "EUR").upper()
-                    if currency in ("", "EUR"):
-                        value = safe_decimal(raw)
-                        if value is not None:
-                            return value
+                if raw in (None, ""):
+                    continue
+                currency = normalize_space(
+                    tag.get("currency") or tag.get("data-currency") or "EUR"
+                ).upper()
+                if currency not in ("", "EUR"):
+                    continue
+                value = safe_decimal(raw)
+                if value is not None:
+                    values.append(value)
             text = normalize_space(tag.get_text(" ", strip=True))
-            match = re.search(r"([0-9][0-9\s.,]*)\s*€", text)
-            return safe_decimal(match.group(1)) if match else None
+            for raw in re.findall(r"([0-9][0-9\s.,]*)\s*€", text):
+                value = safe_decimal(raw)
+                if value is not None:
+                    values.append(value)
+            unique: list[Decimal] = []
+            for value in values:
+                if value not in unique:
+                    unique.append(value)
+            return unique
 
-        def proximity_to_cart(tag: Tag) -> int:
-            """Prefer a price located nearest to the main add-to-cart control.
+        def text_anchor(pattern: re.Pattern[str], exact_code: str = "") -> Tag | None:
+            fallback: Tag | None = None
+            for text_node in broad_scope.find_all(string=pattern):
+                parent = text_node.parent if isinstance(text_node.parent, Tag) else None
+                if parent is None or excluded(parent):
+                    continue
+                if fallback is None:
+                    fallback = parent
+                if exact_code and exact_code in normalize_space(str(text_node)):
+                    return parent
+            return fallback
 
-            Some Oreshak pages render unlabeled focus/recommendation carousels inside
-            the same broad product column.  Those blocks do not always use classes
-            such as ``related`` or ``product-thumb``.  A price in the real product
-            panel shares a much closer ancestor with ``#button-cart`` than a focus
-            card, so proximity is a safer tie-breaker than DOM order.
-            """
-            node: Tag | None = tag
-            for depth in range(10):
-                if node is None:
+        code_anchor = text_anchor(
+            re.compile(r"Код\s+на\s+продукта|Product\s+Code", re.I),
+            normalize_space(product_code),
+        )
+        cart_anchor = broad_scope.select_one(
+            "#button-cart, button[id*='cart'], input[id*='cart'], button[name*='cart']"
+        )
+        title_anchor = broad_scope.select_one("h1")
+        if title_hint:
+            wanted = normalize_space(title_hint).casefold()
+            for heading in broad_scope.select("h1, h2"):
+                if normalize_space(heading.get_text(" ", strip=True)).casefold() == wanted:
+                    title_anchor = heading
                     break
-                if node.select_one("#button-cart, button[id*='cart'], input[id*='cart']"):
-                    return 1000 - depth * 50
+
+        def contains(node: Tag, target: Tag | None) -> bool:
+            if target is None:
+                return False
+            return node is target or any(desc is target for desc in node.descendants)
+
+        price_probe_selector = (
+            "input#price[value], input[name='price'][value], .price-new, .special-price, "
+            "[itemprop='price'], .price-old, .old-price, del, s, "
+            "ul.list-unstyled h2, .product-price h2, h2.price, .product-price, .price"
+        )
+
+        def smallest_panel(anchor: Tag | None, companion: Tag | None) -> Tag | None:
+            node = anchor
+            while isinstance(node, Tag):
+                if excluded(node):
+                    node = node.parent if isinstance(node.parent, Tag) else None
+                    continue
+                if (companion is None or contains(node, companion)) and node.select_one(price_probe_selector):
+                    return node
+                if node is broad_scope:
+                    break
                 node = node.parent if isinstance(node.parent, Tag) else None
-            return 0
+            return None
 
-        def first_value(selectors: Sequence[str]) -> tuple[Decimal | None, str]:
-            for selector in selectors:
-                candidates: list[tuple[int, int, Decimal]] = []
-                for order, tag in enumerate(scope.select(selector)):
-                    if not isinstance(tag, Tag):
+        # Product code is the strongest anchor; title is the fallback.
+        purchase_scope = (
+            smallest_panel(code_anchor, cart_anchor)
+            or smallest_panel(title_anchor, cart_anchor)
+            or smallest_panel(code_anchor, None)
+            or broad_scope
+        )
+
+        def dom_distance(left: Tag, right: Tag | None) -> int:
+            if right is None:
+                return 999
+            left_path: list[Tag] = []
+            node: Tag | None = left
+            while isinstance(node, Tag):
+                left_path.append(node)
+                if node is broad_scope:
+                    break
+                node = node.parent if isinstance(node.parent, Tag) else None
+            right_index: dict[int, int] = {}
+            node = right
+            depth = 0
+            while isinstance(node, Tag):
+                right_index[id(node)] = depth
+                if node is broad_scope:
+                    break
+                node = node.parent if isinstance(node.parent, Tag) else None
+                depth += 1
+            for left_depth, ancestor in enumerate(left_path):
+                if id(ancestor) in right_index:
+                    return left_depth + right_index[id(ancestor)]
+            return 999
+
+        def best_tag(selectors: Sequence[str]) -> tuple[Tag | None, str]:
+            best: tuple[int, int, Tag, str] | None = None
+            for selector_rank, selector in enumerate(selectors):
+                for order, tag in enumerate(purchase_scope.select(selector)):
+                    if not isinstance(tag, Tag) or excluded(tag) or not euro_values(tag):
                         continue
-                    if tag.find_parent(class_=re.compile(r"related|featured|product-grid|product-thumb", re.I)):
-                        continue
-                    value = value_from_tag(tag)
-                    if value is not None:
-                        candidates.append((proximity_to_cart(tag), -order, value))
-                if candidates:
-                    _, _, value = max(candidates, key=lambda item: (item[0], item[1]))
-                    return value, f"main product selector: {selector}"
-            return None, ""
+                    code_distance = dom_distance(tag, code_anchor)
+                    cart_distance = dom_distance(tag, cart_anchor)
+                    title_distance = dom_distance(tag, title_anchor)
+                    score = (
+                        100000
+                        - code_distance * 1000
+                        - cart_distance * 100
+                        - title_distance * 10
+                        - selector_rank * 3
+                        - order
+                    )
+                    # Strong bonus when the candidate's nearest list/container also
+                    # contains the exact product-code marker.
+                    node: Tag | None = tag
+                    for depth in range(5):
+                        if node is None:
+                            break
+                        node_text = normalize_space(node.get_text(" ", strip=True))
+                        if product_code and re.search(
+                            rf"(?:Код\s+на\s+продукта|Product\s+Code)\s*[:#]?\s*{re.escape(product_code)}(?:\D|$)",
+                            node_text,
+                            re.I,
+                        ):
+                            score += 5000 - depth * 250
+                            break
+                        node = node.parent if isinstance(node.parent, Tag) else None
+                    candidate = (score, -order, tag, selector)
+                    if best is None or candidate[:2] > best[:2]:
+                        best = candidate
+            if best is None:
+                return None, ""
+            return best[2], best[3]
 
-        # Highest priority: the add-to-cart price input used by the store itself.
-        price, price_source = first_value((
-            "input#price[value]", "input[name='price'][value]", ".price-new", ".special-price",
-            "[itemprop='price'][content]", "meta[itemprop='price'][content]",
+        # Current/discounted price from explicit checkout or special-price markup.
+        current_tag, current_selector = best_tag((
+            "input#price[value]",
+            "input[name='price'][value]",
+            ".price-new",
+            ".special-price",
+            "[itemprop='price'][content]",
+            "meta[itemprop='price'][content]",
         ))
-        list_price, list_source = first_value((".price-old", ".old-price", "del", "s"))
+        current_values = euro_values(current_tag) if current_tag is not None else []
+        price = current_values[0] if current_values else None
+        price_source = (
+            f"anchored main product selector: {current_selector}"
+            if price is not None else ""
+        )
 
-        # The current theme often puts the regular/list price in the visible h2.
-        visible_price, visible_source = first_value((
-            "ul.list-unstyled h2", ".product-price h2", "h2.price", ".product-price", ".price"
+        old_tag, old_selector = best_tag((".price-old", ".old-price", "del", "s"))
+        old_values = euro_values(old_tag) if old_tag is not None else []
+        list_price = max(old_values) if old_values else None
+        list_source = (
+            f"anchored main product selector: {old_selector}"
+            if list_price is not None else ""
+        )
+
+        visible_tag, visible_selector = best_tag((
+            "ul.list-unstyled h2",
+            ".product-price h2",
+            "h2.price",
+            ".product-price",
+            ".price",
         ))
-        if price is None:
-            price, price_source = visible_price, visible_source
-        elif list_price is None and visible_price is not None and visible_price > price:
-            list_price, list_source = visible_price, visible_source + " (higher than checkout price)"
+        visible_values = euro_values(visible_tag) if visible_tag is not None else []
+        if visible_values:
+            visible_current = min(visible_values)
+            visible_regular = max(visible_values)
+            visible_source = f"anchored main product selector: {visible_selector}"
+            if price is None:
+                price = visible_current
+                price_source = visible_source
+            if visible_regular > (price or visible_current):
+                if list_price is None or visible_regular > list_price:
+                    list_price = visible_regular
+                    if len(visible_values) > 1:
+                        list_source = visible_source + " (higher published pre-promotion price)"
+                    else:
+                        list_source = visible_source + " (higher than checkout price)"
+            elif list_price is None and price is not None and visible_current > price:
+                list_price = visible_current
+                list_source = visible_source + " (higher than checkout price)"
 
         offers = json_ld.get("offers")
         offer_items = offers if isinstance(offers, list) else [offers] if isinstance(offers, dict) else []
@@ -1026,6 +1186,7 @@ class OreshakClient:
                 if value is not None:
                     price, price_source = value, "matched Product JSON-LD offer"
                     break
+
         # Do not manufacture a list price. Temu supports N/A when no genuine
         # previous/list price is published.
         if price is not None and list_price is not None and list_price <= price:

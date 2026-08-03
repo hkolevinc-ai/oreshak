@@ -7,7 +7,7 @@ import scraper
 
 class ParserTests(unittest.TestCase):
     def test_project_version_matches_bundle(self):
-        self.assertEqual(scraper.PROJECT_VERSION, "6.5")
+        self.assertEqual(scraper.PROJECT_VERSION, "6.6")
 
     def test_price_is_taken_from_main_product_not_related_cards(self):
         html = '''
@@ -50,6 +50,49 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(price, Decimal("81.81"))
         self.assertIsNone(list_price)
         self.assertIn("ul.list-unstyled h2", source)
+
+
+    def test_exact_product_code_anchor_rejects_focus_price_in_same_column(self):
+        html = """
+        <div id="content"><div class="product-right">
+          <div class="main-and-focus-wrapper">
+            <div class="focus-products">
+              <h2 class="price">65.45 €</h2>
+            </div>
+            <div class="product-buy-box">
+              <h1>КОМПЛЕКТ ШАХ И ТАБЛА БУК ПИРОГРАФ 48/48</h1>
+              <ul class="list-unstyled">
+                <li><h2 class="price"><span>73.63 €</span> <span>81.81 €</span></h2></li>
+                <li>Код на продукта: 5076</li>
+              </ul>
+              <button id="button-cart">Купи</button>
+            </div>
+          </div>
+        </div></div>
+        """
+        soup = BeautifulSoup(html, "lxml")
+        price, list_price, source, list_source = scraper.OreshakClient._parse_prices(
+            soup, {}, "5076", "КОМПЛЕКТ ШАХ И ТАБЛА БУК ПИРОГРАФ 48/48"
+        )
+        self.assertEqual(price, Decimal("73.63"))
+        self.assertEqual(list_price, Decimal("81.81"))
+        self.assertIn("anchored main product selector", source)
+        self.assertIn("pre-promotion", list_source)
+
+    def test_product_code_distance_beats_unrelated_h2_when_common_parent_contains_cart(self):
+        html = """
+        <div id="content"><div class="product-right">
+          <div><h2 class="price">65.45 €</h2></div>
+          <div class="details"><h1>Main product</h1>
+            <ul class="list-unstyled"><li><h2 class="price">81.81 €</h2></li><li>Код на продукта: 5076</li></ul>
+          </div>
+          <button id="button-cart">Купи</button>
+        </div></div>
+        """
+        soup = BeautifulSoup(html, "lxml")
+        price, list_price, _, _ = scraper.OreshakClient._parse_prices(soup, {}, "5076", "Main product")
+        self.assertEqual(price, Decimal("81.81"))
+        self.assertIsNone(list_price)
 
     def test_hidden_checkout_price_beats_visible_old_price(self):
         html = '''
