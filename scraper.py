@@ -41,7 +41,7 @@ NS_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 NS_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 NS_XML = "http://www.w3.org/XML/1998/namespace"
 NS = {"a": NS_MAIN, "r": NS_REL}
-PROJECT_VERSION = "6.7"
+PROJECT_VERSION = "6.9"
 MAX_TEMU_ROWS = 2000
 
 SOURCE_DEFAULTS: dict[str, str] = {
@@ -72,13 +72,16 @@ KEYWORD_CATEGORY_RULES: list[tuple[re.Pattern[str], str, str]] = [
     (re.compile(r"\b(монет|coin|жетон)"), "54621", "collectible coin"),
     (re.compile(r"(ключодърж|талисман|чарм|медальон)"), "39350", "charm/keyring"),
     (re.compile(r"(висулк|пендант|pendant)"), "13027", "pendant ornament"),
-    (re.compile(r"(кутия).*(бижут)|бижут.*кутия"), "12735", "jewelry box"),
+    (re.compile(r"(?:кутия|ракла).*(?:бижут|часовник|пръстен|обеци)|(?:бижут|часовник|пръстен|обеци).*(?:кутия|ракла)"), "12735", "jewelry/watch box"),
+    (re.compile(r"\bракла\b"), "12179", "decorative storage chest"),
     (re.compile(r"(кутия|кашон).*(подар|gift)"), "39880", "gift box"),
     (re.compile(r"(стойка|поставка|рафт).*(вино|бутил)"), "12686", "wine rack"),
     (re.compile(r"(кутия).*(вино|бутил)"), "39880", "wine gift box"),
     (re.compile(r"\bбуре|бъчв"), "10905", "barrel"),
     (re.compile(r"бъклиц|манерк|кег"), "10888", "flask/keg"),
     (re.compile(r"(трофе|глиги|сръндак|глиган|елен).*(дъск|поставка)|дъск.*трофе"), "32650", "trophy mount"),
+    (re.compile(r"(?:торбичка|чанта|калъф|кейс).*(?:шах|табла|зар)|(?:шах|табла|зар).*(?:торбичка|чанта|калъф|кейс)"), "25613", "chess/backgammon storage accessory"),
+    (re.compile(r"(?:професионал|състезател|стаунтон|лети).*(?:фигур)|(?:фигур).*(?:професионал|състезател|стаунтон)"), "25613", "professional chess pieces"),
     (re.compile(r"(шахматен часовник|фигури за шах|пулове|\bзар\b|зарове|зарчета|аксесоар.*шах|аксесоар.*табла)"), "25613", "game pieces/accessories"),
     (re.compile(r"(комплект|сет).*(шах|табла)|шах.*табла"), "25615", "board game"),
     (re.compile(r"професионален.*шах|шахмат.*професион"), "51777", "professional chess"),
@@ -104,7 +107,7 @@ KEYWORD_CATEGORY_RULES: list[tuple[re.Pattern[str], str, str]] = [
     (re.compile(r"(звънче|хлопка)"), "12141", "hanging bell ornament"),
     (re.compile(r"\bскрин\b"), "12179", "decorative storage box"),
     (re.compile(r"(керамичн).*(слон|цървул)|(?:слонче|цървулк).*(керами)"), "12140", "ceramic collectible figurine"),
-    (re.compile(r"(пано|пластик|релеф|дърворезб)"), "12151", "wall sculpture"),
+    (re.compile(r"(пан[оo]|пластик|релеф|дърворезб)"), "12151", "wall sculpture"),
     (re.compile(r"(картина|живопис|painting)"), "12867", "painting"),
     (re.compile(r"(гравюра|дърворит|woodcut)"), "39291", "woodcut"),
     (re.compile(r"(смесена техника|mixed media)"), "39280", "mixed media"),
@@ -137,12 +140,16 @@ LOW_CONFIDENCE_PRODUCT_RULES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"стенен\s+часовник|часовников\s+механизъм", re.I), "no wall-clock category exists in the supplied Temu template"),
     (re.compile(r"стойка\s+за\s+ключове|\bзакачалка\b", re.I), "no key-holder/coat-hook category exists in the supplied Temu template"),
     (re.compile(r"\bточилка\b|\bхаван(?:че)?\b|\bхалба\b|\bюзче\b|\bшиш(?:ове)?\b|\bщипки\b", re.I), "no safe category for this kitchen utensil exists in the supplied Temu template"),
+    (re.compile(r"дръжка.*дъск|дъск.*дръжка", re.I), "board handle/hardware is not a serving board and no hardware category exists in the supplied Temu template"),
     (re.compile(r"\bкупа\b|\bкупичка\b|\bгаванка\b", re.I), "no bowl category exists in the supplied Temu template"),
     (re.compile(r"запушалка.*(?:вино|бутилка)|(?:вино|бутилка).*запушалка", re.I), "single bottle stopper is not a Wine Accessory Set"),
     (re.compile(r"отварачка.*бира", re.I), "single beer opener has no safe category in the supplied Temu template"),
     (re.compile(r"бутилка\s+уникат|буркан.*ваза", re.I), "decorative bottle/vase has no safe category in the supplied Temu template"),
     (re.compile(r"поставка\s+за\s+химикалки|\bмоливник\b", re.I), "no pen-holder category exists in the supplied Temu template"),
     (re.compile(r"\b(?:меч|сабя|каракулак)\b", re.I), "sword/sabre product is not covered by the supplied kitchen-knife categories"),
+
+    # Barrel taps/plugs are accessories, not barrels, and the supplied template has no safe leaf for them.
+    (re.compile(r"(?:тапа|канелк).*(?:буре|бъчв)|(?:буре|бъчв).*(?:тапа|канелк)", re.I), "barrel tap/plug is not a barrel and no barrel-accessory category exists in the supplied Temu template"),
 
     # Previously identified unsupported products.
     (re.compile(r"бъклиц|манерк|hip\s*flask", re.I), "no flask/drinkware category exists in the supplied Temu template"),
@@ -1001,6 +1008,22 @@ class OreshakClient:
                     unique.append(value)
             return unique
 
+        def visible_euro_values(tag: Tag) -> list[Decimal]:
+            """Return only EUR amounts that are visibly rendered as text.
+
+            Hidden ``value``/``data-price`` attributes on the live Oreshak page
+            can contain customer-group or wholesale prices (for example 20%
+            below the public price).  Those values must not be mixed into the
+            visible price cluster beside the product code.
+            """
+            text = normalize_space(tag.get_text(" ", strip=True))
+            values: list[Decimal] = []
+            for raw in re.findall(r"([0-9][0-9\s.,]*)\s*€", text):
+                value = safe_decimal(raw)
+                if value is not None and value not in values:
+                    values.append(value)
+            return values
+
         def text_anchor(pattern: re.Pattern[str]) -> Tag | None:
             for text_node in broad_scope.find_all(string=pattern):
                 parent = text_node.parent if isinstance(text_node.parent, Tag) else None
@@ -1092,7 +1115,7 @@ class OreshakClient:
                         re.I,
                     ):
                         continue
-                    values = euro_values(sibling)
+                    values = visible_euro_values(sibling)
                     if not values:
                         continue
                     # Product-card grids usually contain several outbound links;
@@ -1199,6 +1222,23 @@ class OreshakClient:
                 return None, ""
             return best[2], best[3]
 
+        # Product JSON-LD is the strongest source for the currently public
+        # offer price because it is tied to the matched Product entity.  Read it
+        # before generic DOM inputs, which may contain customer-group prices.
+        structured_price: Decimal | None = None
+        offers = json_ld.get("offers")
+        offer_items = offers if isinstance(offers, list) else [offers] if isinstance(offers, dict) else []
+        for offer in offer_items:
+            if not isinstance(offer, dict):
+                continue
+            currency = normalize_space(str(offer.get("priceCurrency") or "EUR")).upper()
+            if currency not in ("", "EUR"):
+                continue
+            value = safe_decimal(offer.get("price") or offer.get("lowPrice"))
+            if value is not None:
+                structured_price = value
+                break
+
         # Current/discounted price from explicit checkout or special-price markup.
         current_tag, current_selector = best_tag((
             "input#price[value]",
@@ -1209,11 +1249,16 @@ class OreshakClient:
             "meta[itemprop='price'][content]",
         ))
         current_values = euro_values(current_tag) if current_tag is not None else []
-        price = current_values[0] if current_values else None
-        price_source = (
-            f"anchored main product selector: {current_selector}"
-            if price is not None else ""
-        )
+        explicit_price = current_values[0] if current_values else None
+        if structured_price is not None:
+            price = structured_price
+            price_source = "matched Product JSON-LD offer"
+        else:
+            price = explicit_price
+            price_source = (
+                f"anchored main product selector: {current_selector}"
+                if price is not None else ""
+            )
 
         old_tag, old_selector = best_tag((".price-old", ".old-price", "del", "s"))
         old_values = euro_values(old_tag) if old_tag is not None else []
@@ -1246,34 +1291,29 @@ class OreshakClient:
 
         if visible_values:
             visible_current = min(visible_values)
-            visible_regular = max(visible_values)
             if price is None:
                 price = visible_current
                 price_source = visible_source
-            if visible_regular > (price or visible_current):
-                if list_price is None or visible_regular > list_price:
+
+            # Select the nearest higher visible amount, not the maximum amount
+            # in a broad container.  This limits contamination from unrelated
+            # focus cards while preserving the genuine public pre-promotion
+            # price immediately above the current Product offer.
+            if price is not None:
+                higher_candidates = sorted(value for value in visible_values if value > price)
+                visible_regular = higher_candidates[0] if higher_candidates else None
+            else:
+                visible_regular = max(visible_values)
+
+            if visible_regular is not None:
+                if list_price is None or visible_regular < list_price:
                     list_price = visible_regular
                     if len(visible_values) > 1:
-                        list_source = visible_source + " (higher published pre-promotion price)"
-                    else:
+                        list_source = visible_source + " (nearest higher published pre-promotion price)"
+                    elif price_source.startswith("anchored main product selector: input"):
                         list_source = visible_source + " (higher than checkout price)"
-            elif list_price is None and price is not None and visible_current > price:
-                list_price = visible_current
-                list_source = visible_source + " (higher than checkout price)"
-
-        offers = json_ld.get("offers")
-        offer_items = offers if isinstance(offers, list) else [offers] if isinstance(offers, dict) else []
-        if price is None:
-            for offer in offer_items:
-                if not isinstance(offer, dict):
-                    continue
-                currency = normalize_space(str(offer.get("priceCurrency") or "EUR")).upper()
-                if currency not in ("", "EUR"):
-                    continue
-                value = safe_decimal(offer.get("price") or offer.get("lowPrice"))
-                if value is not None:
-                    price, price_source = value, "matched Product JSON-LD offer"
-                    break
+                    else:
+                        list_source = visible_source + " (higher than current Product offer)"
 
         # Do not manufacture a list price. Temu supports N/A when no genuine
         # previous/list price is published.
@@ -1587,6 +1627,8 @@ def category_for(product: Product, overrides: Mapping[str, str], schema: Templat
         if pattern.search(title_only) and category_id in schema.category_names:
             return category_id, reason, "high"
     source_slug = slug_key(product.source_category_url)
+    if source_slug == "kuhnenski-aksesoari-ot-darvo-oreshak" and re.search(r"\bдъск", title_only) and "54423" in schema.category_names:
+        return "54423", "kitchen-source cutting/serving board", "high"
     default = SOURCE_DEFAULTS.get(source_slug, "13020")
     if source_slug in STRICT_EXPLICIT_MAPPING_SLUGS:
         return default, f"no explicit safe product rule for heterogeneous source category: {source_slug}", "low"

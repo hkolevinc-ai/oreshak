@@ -7,7 +7,7 @@ import scraper
 
 class ParserTests(unittest.TestCase):
     def test_project_version_matches_bundle(self):
-        self.assertEqual(scraper.PROJECT_VERSION, "6.7")
+        self.assertEqual(scraper.PROJECT_VERSION, "6.9")
 
     def test_price_is_taken_from_main_product_not_related_cards(self):
         html = '''
@@ -78,6 +78,33 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(list_price, Decimal("81.81"))
         self.assertTrue("anchored main product selector" in source or "exact product-code adjacent price block" in source)
         self.assertIn("pre-promotion", list_source)
+
+    def test_json_ld_public_price_ignores_hidden_customer_group_value(self):
+        html = """
+        <div id="content"><div class="product-right">
+          <ul class="list-unstyled product-main-price">
+            <li><input type="hidden" name="price" value="65.45"></li>
+            <li><h4><span>81.81 € (160.00 лв.)</span></h4></li>
+          </ul>
+          <ul class="list-unstyled product-code-list">
+            <li><span>Код на продукта:</span> <strong>5076</strong></li>
+          </ul>
+          <button id="button-cart">Купи</button>
+        </div></div>
+        """
+        json_ld = {
+            "@type": "Product",
+            "name": "КОМПЛЕКТ ШАХ И ТАБЛА БУК ПИРОГРАФ 48/48",
+            "offers": {"priceCurrency": "EUR", "price": "73.63"},
+        }
+        soup = BeautifulSoup(html, "lxml")
+        price, list_price, source, list_source = scraper.OreshakClient._parse_prices(
+            soup, json_ld, "5076", "КОМПЛЕКТ ШАХ И ТАБЛА БУК ПИРОГРАФ 48/48"
+        )
+        self.assertEqual(price, Decimal("73.63"))
+        self.assertEqual(list_price, Decimal("81.81"))
+        self.assertEqual(source, "matched Product JSON-LD offer")
+        self.assertNotIn("65.45", list_source)
 
     def test_live_layout_adjacent_price_list_beats_structurally_closer_focus_price(self):
         html = """
@@ -715,6 +742,90 @@ class ParserTests(unittest.TestCase):
             description="Размери: 47.5/23/2.5 см.",
         )
         self.assertEqual(scraper.detect_material_candidates(product)[0], "Wood")
+
+
+    def test_chess_bags_are_accessories_not_board_games(self):
+        class FakeSchema:
+            category_names = {"25613": "Game Pieces", "25615": "Board Games", "13020": "Collectible Figurines"}
+        for title in (
+            "КАДИФЕНА ТОРБИЧКА С ВРЪЗКИ ЗА КУТИЯ ЗА ШАХ И ТАБЛА 34-34",
+            "ТЕКСТИЛНА ЧАНТА ЗА ШАХ/ТАБЛА",
+        ):
+            product = scraper.Product(url="https://oreshak.bg/p", source_category_url="https://oreshak.bg/aksesoari-za-shah-i-tabla", title=title)
+            category_id, reason, confidence = scraper.category_for(product, {}, FakeSchema())
+            self.assertEqual(category_id, "25613")
+            self.assertIn("storage accessory", reason)
+            self.assertEqual(confidence, "high")
+
+    def test_watch_ring_and_earring_boxes_map_to_jewelry_boxes(self):
+        class FakeSchema:
+            category_names = {"12735": "Jewelry Boxes", "12179": "Decorative Boxes", "13020": "Collectible Figurines"}
+        for title in (
+            "ЛУКСОЗНА ДЪРВЕНА КУТИЯ ЗА 6 ЧАСОВНИКА",
+            "ЛУКСОЗНА МАСИВНА КУТИЯ ЗА ПРЪСТЕНИ И ОБЕЦИ",
+        ):
+            product = scraper.Product(url="https://oreshak.bg/p", source_category_url="https://oreshak.bg/kutii-za-aksesoari", title=title)
+            category_id, _, confidence = scraper.category_for(product, {}, FakeSchema())
+            self.assertEqual(category_id, "12735")
+            self.assertEqual(confidence, "high")
+
+    def test_carved_chests_are_boxes_not_wall_sculptures(self):
+        class FakeSchema:
+            category_names = {"12179": "Decorative Boxes", "12151": "Wall Sculptures", "12735": "Jewelry Boxes", "13020": "Collectible Figurines"}
+        chest = scraper.Product(url="https://oreshak.bg/p", source_category_url="https://oreshak.bg/kutii-za-aksesoari", title="РАКЛА С ДЪРВОРЕЗБА РАЗЛИЧНИ МОДЕЛИ")
+        category_id, _, _ = scraper.category_for(chest, {}, FakeSchema())
+        self.assertEqual(category_id, "12179")
+        jewelry_chest = scraper.Product(url="https://oreshak.bg/p2", source_category_url="https://oreshak.bg/kutii-za-aksesoari", title="ДЪРВОРЕЗБОВАНА РАКЛА ЗА БИЖУТА ШЕВИЦА")
+        category_id, _, _ = scraper.category_for(jewelry_chest, {}, FakeSchema())
+        self.assertEqual(category_id, "12735")
+
+    def test_professional_chess_pieces_do_not_map_to_figurines(self):
+        class FakeSchema:
+            category_names = {"25613": "Game Pieces", "12140": "Collectible Figurines", "13020": "Collectible Figurines"}
+        for title in (
+            "ЛЕТИ ПРОФЕСИОНАЛНИ ФИГУРИ ОТ МЕСИНГ",
+            "ЛУКСОЗНИ АКАЦИЕВИ СЪСТЕЗАТЕЛНИ ФИГУРИ СТАУНТОН",
+        ):
+            product = scraper.Product(url="https://oreshak.bg/p", source_category_url="https://oreshak.bg/profesionalen-shahmat", title=title)
+            category_id, _, confidence = scraper.category_for(product, {}, FakeSchema())
+            self.assertEqual(category_id, "25613")
+            self.assertEqual(confidence, "high")
+
+    def test_latin_o_in_pano_still_maps_to_wall_sculpture(self):
+        class FakeSchema:
+            category_names = {"12151": "Wall Sculptures", "13020": "Collectible Figurines"}
+        product = scraper.Product(url="https://oreshak.bg/p", source_category_url="https://oreshak.bg/dyalani-unikati-ot-darvo", title="ДЪРВЕНО ПАНO УНИКАТ ДЕТЕ С КУЧЕ")
+        category_id, _, confidence = scraper.category_for(product, {}, FakeSchema())
+        self.assertEqual(category_id, "12151")
+        self.assertEqual(confidence, "high")
+
+    def test_plain_board_in_kitchen_source_maps_to_serving_board(self):
+        class FakeSchema:
+            category_names = {"54423": "Serving Boards", "9923": "Tool & Gadget Sets", "13020": "Collectible Figurines"}
+        product = scraper.Product(url="https://oreshak.bg/p", source_category_url="https://oreshak.bg/kuhnenski-aksesoari-ot-darvo-Oreshak", title="ДОМАКИНСКА ДЪСКА С ДУПКА 3")
+        category_id, reason, confidence = scraper.category_for(product, {}, FakeSchema())
+        self.assertEqual(category_id, "54423")
+        self.assertIn("kitchen-source", reason)
+        self.assertEqual(confidence, "high")
+
+    def test_barrel_taps_and_plugs_are_not_mapped_as_barrels(self):
+        class FakeSchema:
+            category_names = {"10905": "Barrels", "13020": "Collectible Figurines"}
+        for title in ("ДЪРВЕНА ТАПА ЗА БУРЕ ДО 10 Л", "КАНЕЛКА ЗА БУРЕ ГОЛЯМА"):
+            product = scraper.Product(url="https://oreshak.bg/p", source_category_url="https://oreshak.bg/baklitsi-i-bureta", title=title)
+            _, reason, confidence = scraper.category_for(product, {}, FakeSchema())
+            self.assertEqual(confidence, "low")
+            self.assertIn("not a barrel", reason)
+
+
+
+    def test_board_handle_hardware_is_not_a_serving_board(self):
+        class FakeSchema:
+            category_names = {"54423": "Serving Boards", "9923": "Tool & Gadget Sets", "13020": "Collectible Figurines"}
+        product = scraper.Product(url="https://oreshak.bg/p", source_category_url="https://oreshak.bg/kuhnenski-aksesoari-ot-darvo-Oreshak", title="МЕТАЛНА ДРЪЖКА ЗА ДЪСКА")
+        _, reason, confidence = scraper.category_for(product, {}, FakeSchema())
+        self.assertEqual(confidence, "low")
+        self.assertIn("hardware", reason)
 
 
 if __name__ == "__main__":
