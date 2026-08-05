@@ -988,5 +988,44 @@ class ParserTests(unittest.TestCase):
         self.assertIn("empty", reason)
 
 
+    def test_optional_laser_engraving_service_is_not_surface_finish(self):
+        self.assertFalse(scraper.has_actual_laser_engraving_finish(
+            "По желание може да бъде добавено персонализирано лазерно гравиране."
+        ))
+
+    def test_actual_laser_engraved_product_is_surface_finish(self):
+        self.assertTrue(scraper.has_actual_laser_engraving_finish(
+            "Острието е лазерно гравирано с традиционен орнамент."
+        ))
+
+    def test_dimension_issues_are_reviewable_but_weight_issues_block(self):
+        config = {"review_dimension_issues": True}
+        self.assertTrue(scraper.is_reviewable_dimension_issue(
+            "Internal/component dimensions were selected as product dimensions", config
+        ))
+        self.assertFalse(scraper.is_reviewable_dimension_issue(
+            "Implausible chess/board-game weight: 0.1 g for 48 cm product", config
+        ))
+
+    def test_regression_client_accepts_short_network_profile(self):
+        client = scraper.OreshakClient(
+            {"request_timeout_seconds": 35, "max_retries": 5, "request_delay_seconds": 0},
+            timeout_override=15,
+            max_retries_override=2,
+        )
+        self.assertEqual(client.timeout, 15)
+        self.assertEqual(client.max_retries, 2)
+
+
+    def test_regulated_low_confidence_categories_stay_blocked(self):
+        config = {"block_regulated_unsupported_products": True}
+        self.assertTrue(scraper.is_hard_blocked_low_confidence_category(
+            "alcohol is outside the categories in the supplied Temu template", config
+        ))
+        self.assertFalse(scraper.is_hard_blocked_low_confidence_category(
+            "finished keyring is not a Charms component and no keyring category exists", config
+        ))
+
+
 if __name__ == "__main__":
     unittest.main()

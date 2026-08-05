@@ -42,5 +42,12 @@
   "package_measurement_mode": "estimate_and_review",
   "package_dimension_padding_cm": 2.0,
   "package_weight_padding_percent": 10.0,
-  "package_weight_padding_min_g": 50.0
+  "package_weight_padding_min_g": 50.0,
+  "regression_request_timeout_seconds": 15,
+  "regression_max_retries": 2,
+  "regression_retry_passes": 1,
+  "regression_retry_pause_seconds": 10,
+  "review_low_confidence_categories": true,
+  "review_dimension_issues": true,
+  "block_regulated_unsupported_products": true
 }

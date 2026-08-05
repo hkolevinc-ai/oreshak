@@ -513,11 +513,17 @@ class TemplateSchema:
 
 
 class OreshakClient:
-    def __init__(self, config: Mapping[str, Any]):
+    def __init__(
+        self,
+        config: Mapping[str, Any],
+        *,
+        timeout_override: int | None = None,
+        max_retries_override: int | None = None,
+    ):
         self.config = config
         self.delay = float(config.get("request_delay_seconds", 1.2))
-        self.timeout = int(config.get("request_timeout_seconds", 35))
-        self.max_retries = int(config.get("max_retries", 5))
+        self.timeout = int(timeout_override if timeout_override is not None else config.get("request_timeout_seconds", 35))
+        self.max_retries = int(max_retries_override if max_retries_override is not None else config.get("max_retries", 5))
         if cloudscraper is not None:
             self.scraper = cloudscraper.create_scraper(
                 browser={"browser": "chrome", "platform": "windows", "mobile": False},
@@ -551,9 +557,10 @@ class OreshakClient:
                 raise RuntimeError(f"HTTP {response.status_code}; challenge={challenge}; length={len(text)}")
             except Exception as exc:  # network retry boundary
                 last_error = exc
-                sleep_for = min(30, 2 ** attempt + random.random())
                 logging.warning("Fetch attempt %s/%s failed for %s: %s", attempt, self.max_retries, url, exc)
-                time.sleep(sleep_for)
+                if attempt < self.max_retries:
+                    sleep_for = min(30, 2 ** attempt + random.random())
+                    time.sleep(sleep_for)
         raise RuntimeError(f"Could not fetch {url}: {last_error}")
 
     def discover_product_links(self, category_url: str, max_pages: int = 100) -> list[str]:
@@ -1918,6 +1925,41 @@ def fabric_composition_fields(product: Product, schema: TemplateSchema) -> dict[
     return row
 
 
+
+def has_actual_laser_engraving_finish(text: str) -> bool:
+    """Return True only when laser engraving describes the supplied product.
+
+    Oreshak descriptions frequently advertise optional personalization such as
+    "може да бъде лазерно гравиран". That is a service, not the product's
+    actual surface finish, and must not populate Temu's Surface Finishing Type.
+    """
+    normalized = normalize_space(text).casefold()
+    if not re.search(r"лазер\w*\s+грав\w*|laser\s+engrav\w*", normalized, re.I):
+        return False
+
+    sentences = re.split(r"(?<=[.!?;])\s+|\n+", normalized)
+    optional_markers = re.compile(
+        r"по\s+желание|при\s+желание|може\s+да|възможност|предлагаме|"
+        r"персонализ|добавим|услуг|срещу\s+допълн|по\s+поръчка|optional|can\s+be",
+        re.I,
+    )
+    actual_markers = re.compile(
+        r"(?:е|са|с)\s+лазер\w*\s+грав\w*|"
+        r"лазер\w*\s+гравиран(?:а|о|и|ият|ата|ото|ите)?\b|"
+        r"декориран(?:а|о|и)?\s+(?:чрез|с)\s+лазер\w*\s+грав\w*|"
+        r"laser[-\s]?engraved",
+        re.I,
+    )
+    for sentence in sentences:
+        if not re.search(r"лазер\w*\s+грав\w*|laser\s+engrav\w*", sentence, re.I):
+            continue
+        if optional_markers.search(sentence):
+            continue
+        if actual_markers.search(sentence):
+            return True
+    return False
+
+
 def infer_required_value(column: str, product: Product, variant: Variant, row: dict[str, Any], schema: TemplateSchema, config: Mapping[str, Any]) -> Any:
     category_id = product.category_id
     header = schema.headers.get(column, "")
@@ -1969,7 +2011,7 @@ def infer_required_value(column: str, product: Product, variant: Variant, row: d
             candidates.append("Powder Coating")
         if "боядис" in text or "painted" in text:
             candidates.append("Painted")
-        if "лазер" in text and "грав" in text:
+        if has_actual_laser_engraving_finish(text):
             candidates.append("Laser Engraving")
         if "кован" in text or "hammered" in text:
             candidates.append("Hammered")
@@ -2260,6 +2302,37 @@ def prices_for_upload(product: Product, config: Mapping[str, Any]) -> tuple[Deci
     return price_eur, list_price_eur, basis
 
 
+HARD_BLOCKED_LOW_CONFIDENCE_MARKERS: tuple[str, ...] = (
+    "alcohol",
+    "food is outside",
+    "cosmetic",
+    "essential oil",
+    "fragrance",
+    "smoking-accessory",
+    "sword/sabre",
+)
+
+
+def is_hard_blocked_low_confidence_category(reason: str, config: Mapping[str, Any]) -> bool:
+    """Keep regulated/unsupported product types blocked even in REVIEW mode."""
+    if not bool(config.get("block_regulated_unsupported_products", True)):
+        return False
+    lowered = normalize_space(reason).casefold()
+    return any(marker.casefold() in lowered for marker in HARD_BLOCKED_LOW_CONFIDENCE_MARKERS)
+
+
+def is_reviewable_dimension_issue(issue: str, config: Mapping[str, Any]) -> bool:
+    """Return True when a dimension problem should retain the row as REVIEW.
+
+    Weight problems remain blocking because they can materially affect logistics.
+    """
+    if not bool(config.get("review_dimension_issues", True)):
+        return False
+    has_dimension_signal = bool(re.search(r"dimension|размер|component|internal|вътреш|отделение", issue, re.I))
+    has_weight_signal = bool(re.search(r"weight|тегло|\bg\b|kg|кг", issue, re.I))
+    return has_dimension_signal and not has_weight_signal
+
+
 def build_row(variant: Variant, schema: TemplateSchema, config: Mapping[str, Any]) -> tuple[dict[str, Any], list[str], list[str]]:
     product = variant.product
     price_eur, list_price_eur, _ = prices_for_upload(product, config)
@@ -2356,9 +2429,21 @@ def build_row(variant: Variant, schema: TemplateSchema, config: Mapping[str, Any
     if product.category_id not in schema.category_names:
         errors.append(f"Unknown Temu category {product.category_id}")
     if product.mapping_confidence == "low":
-        errors.append(f"No safe Temu category mapping: {product.mapping_reason}; add category_overrides.csv entry")
-    errors.extend(source_measurement_errors(product, config))
-    errors.extend(measurement_sanity_errors(product))
+        mapping_issue = f"Low-confidence Temu category mapping retained for REVIEW: {product.mapping_reason}"
+        if is_hard_blocked_low_confidence_category(product.mapping_reason, config):
+            errors.append(f"Unsupported regulated product type: {product.mapping_reason}")
+        elif bool(config.get("review_low_confidence_categories", True)):
+            review_notes.append(mapping_issue)
+        else:
+            errors.append(f"No safe Temu category mapping: {product.mapping_reason}; add category_overrides.csv entry")
+
+    measurement_errors = source_measurement_errors(product, config)
+    sanity_issues = measurement_sanity_errors(product)
+    for issue in [*measurement_errors, *sanity_issues]:
+        if is_reviewable_dimension_issue(issue, config):
+            review_notes.append(f"Dimension issue retained for REVIEW: {issue}")
+        else:
+            errors.append(issue)
     return row, dedupe(errors), dedupe(review_notes)
 
 
@@ -2520,7 +2605,20 @@ def main() -> int:
             category_urls = [url for url in category_urls if any(needle in url.casefold() for needle in needles)]
         override_path = base_dir / str(config.get("category_overrides_file", "category_overrides.csv"))
         overrides = load_overrides(override_path)
-        client = OreshakClient(config)
+        regression_mode = bool(args.url_file)
+        if regression_mode:
+            client = OreshakClient(
+                config,
+                timeout_override=int(config.get("regression_request_timeout_seconds", 15)),
+                max_retries_override=int(config.get("regression_max_retries", 2)),
+            )
+            logging.info(
+                "Regression network profile: timeout=%ss, attempts=%s",
+                client.timeout,
+                client.max_retries,
+            )
+        else:
+            client = OreshakClient(config)
         discovered: list[tuple[str, str]] = []
         seen_links: set[str] = set()
         targeted_expected_codes: dict[str, str] = {}
@@ -2563,23 +2661,63 @@ def main() -> int:
 
         products: list[Product] = []
         failures: list[dict[str, Any]] = []
+        retry_queue: list[tuple[str, str, str]] = []
+
+        def parse_and_prepare(active_client: OreshakClient, url: str, category_url: str) -> Product:
+            product = active_client.parse_product(url, category_url)
+            expected_code = targeted_expected_codes.get(url)
+            if expected_code and product.code != expected_code:
+                raise ValueError(f"Targeted regression URL returned code {product.code!r}; expected {expected_code!r}")
+            ensure_product_description(product)
+            product.category_id, product.mapping_reason, product.mapping_confidence = category_for(product, overrides, schema)
+            if product.mapping_confidence != "high":
+                product.warnings.append(f"Category mapping {product.mapping_confidence}: {product.mapping_reason}")
+            if product.category_id not in schema.category_names:
+                raise ValueError(f"Mapped category {product.category_id} is not in the template")
+            return product
+
         for index, (url, category_url) in enumerate(discovered, start=1):
             logging.info("Product %s/%s: %s", index, len(discovered), url)
             try:
-                product = client.parse_product(url, category_url)
-                expected_code = targeted_expected_codes.get(url)
-                if expected_code and product.code != expected_code:
-                    raise ValueError(f"Targeted regression URL returned code {product.code!r}; expected {expected_code!r}")
-                ensure_product_description(product)
-                product.category_id, product.mapping_reason, product.mapping_confidence = category_for(product, overrides, schema)
-                if product.mapping_confidence != "high":
-                    product.warnings.append(f"Category mapping {product.mapping_confidence}: {product.mapping_reason}")
-                if product.category_id not in schema.category_names:
-                    raise ValueError(f"Mapped category {product.category_id} is not in the template")
-                products.append(product)
+                products.append(parse_and_prepare(client, url, category_url))
             except Exception as exc:
                 logging.exception("Product failed: %s", url)
-                failures.append({"product_url": url, "source_category_url": category_url, "error": str(exc)})
+                if regression_mode and "Could not fetch" in str(exc):
+                    retry_queue.append((url, category_url, str(exc)))
+                else:
+                    failures.append({"product_url": url, "source_category_url": category_url, "error": str(exc)})
+
+        retry_passes = max(0, int(config.get("regression_retry_passes", 1))) if regression_mode else 0
+        retry_pause = max(0.0, float(config.get("regression_retry_pause_seconds", 10)))
+        for retry_pass in range(1, retry_passes + 1):
+            if not retry_queue:
+                break
+            logging.warning(
+                "Regression retry pass %s/%s for %s network-failed product URLs after %.1fs pause",
+                retry_pass, retry_passes, len(retry_queue), retry_pause,
+            )
+            if retry_pause:
+                time.sleep(retry_pause)
+            current_queue, retry_queue = retry_queue, []
+            retry_client = OreshakClient(
+                config,
+                timeout_override=int(config.get("regression_request_timeout_seconds", 15)),
+                max_retries_override=int(config.get("regression_max_retries", 2)),
+            )
+            for index, (url, category_url, previous_error) in enumerate(current_queue, start=1):
+                logging.info("Regression retry %s/%s: %s", index, len(current_queue), url)
+                try:
+                    products.append(parse_and_prepare(retry_client, url, category_url))
+                except Exception as exc:
+                    logging.exception("Regression retry failed: %s", url)
+                    if retry_pass < retry_passes and "Could not fetch" in str(exc):
+                        retry_queue.append((url, category_url, str(exc)))
+                    else:
+                        failures.append({
+                            "product_url": url,
+                            "source_category_url": category_url,
+                            "error": f"Initial: {previous_error} | Retry: {exc}",
+                        })
 
         temu_rows: list[dict[str, Any]] = []
         validation_rows: list[dict[str, Any]] = []
