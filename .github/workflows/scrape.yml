@@ -4,15 +4,16 @@ on:
   workflow_dispatch:
     inputs:
       run_mode:
-        description: "Test = 1 product per category; Full = all products"
+        description: "Regression = known problem SKUs; Test = 1 product/category; Full = all products"
         required: true
         type: choice
         options:
+          - regression
           - test
           - full
-        default: test
+        default: regression
       category:
-        description: "Optional URL slug filter, e.g. nojove-ot-balgaria"
+        description: "Optional URL slug filter for test/full, e.g. nojove-ot-balgaria"
         required: false
         default: ""
 
@@ -28,14 +29,11 @@ jobs:
           cache: "pip"
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
-      - name: Verify bundle version and remove stale tests
+      - name: Verify bundle version
         shell: bash
         run: |
-          test "$(tr -d '\r\n' < VERSION.txt)" = "6.9"
-          if grep -R --line-number "test_depth_is_used_as_third_dimension" tests; then
-            echo "Stale v5 test file detected. Replace the entire tests folder with v6.9."
-            exit 1
-          fi
+          test "$(tr -d '\r\n' < VERSION.txt)" = "7.0"
+          test -f regression_urls.csv
       - name: Run parser tests
         run: python -m unittest discover -s tests -v
       - name: Validate template
@@ -44,12 +42,14 @@ jobs:
         shell: bash
         run: |
           EXTRA_ARGS=()
-          if [ "${{ inputs.run_mode }}" = "test" ]; then
+          if [ "${{ inputs.run_mode }}" = "regression" ]; then
+            EXTRA_ARGS+=(--limit 0 --url-file regression_urls.csv)
+          elif [ "${{ inputs.run_mode }}" = "test" ]; then
             EXTRA_ARGS+=(--limit 0 --limit-per-category 1)
           else
             EXTRA_ARGS+=(--limit 0)
           fi
-          if [ -n "${{ inputs.category }}" ]; then
+          if [ -n "${{ inputs.category }}" ] && [ "${{ inputs.run_mode }}" != "regression" ]; then
             EXTRA_ARGS+=(--category "${{ inputs.category }}")
           fi
           python scraper.py "${EXTRA_ARGS[@]}"
