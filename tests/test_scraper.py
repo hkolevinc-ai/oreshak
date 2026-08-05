@@ -7,7 +7,7 @@ import scraper
 
 class ParserTests(unittest.TestCase):
     def test_project_version_matches_bundle(self):
-        self.assertEqual(scraper.PROJECT_VERSION, "6.9")
+        self.assertEqual(scraper.PROJECT_VERSION, "7.0")
 
     def test_price_is_taken_from_main_product_not_related_cards(self):
         html = '''
@@ -826,6 +826,166 @@ class ParserTests(unittest.TestCase):
         _, reason, confidence = scraper.category_for(product, {}, FakeSchema())
         self.assertEqual(confidence, "low")
         self.assertIn("hardware", reason)
+
+
+    def test_total_set_weight_with_hyphen_and_decimal_is_parsed(self):
+        text = "Тегло на целия комплект - 2.00 кг."
+        value, source = scraper.parse_weight_details(text)
+        self.assertEqual(value, 2000.0)
+        self.assertIn("целия комплект", source)
+
+    def test_split_decimal_weight_is_repaired(self):
+        self.assertEqual(scraper.parse_weight("Тегло на целия комплект - 1 .00 кг."), 1000.0)
+
+    def test_total_product_weight_beats_component_weight(self):
+        text = "Тегло на фигура: 35 гр. Тегло на целия комплект: 2,00 кг."
+        self.assertEqual(scraper.parse_weight(text), 2000.0)
+
+    def test_watch_box_keeps_outer_two_dimensions_not_compartment(self):
+        text = (
+            "Размери: дължина: 38 см., широчина: 18 см., "
+            "дебелина на дървото: 9.5 мм., Размери на отделението: 7.5/6.5 см."
+        )
+        full, partial, source = scraper.parse_dimensions_details(text, "ЛУКСОЗНА ДЪРВЕНА КУТИЯ ЗА ЧАСОВНИЦИ")
+        self.assertIsNone(full)
+        self.assertEqual(partial, (38.0, 18.0))
+        self.assertNotIn("отделение", source.casefold())
+
+    def test_card_box_outer_dimensions_beat_compartment(self):
+        text = (
+            "Размери на кутията: дължина: 12.5 см., широчина: 9.5 см., "
+            "височина: 4 см., Размери на отделението: 9.5/6.5 см."
+        )
+        self.assertEqual(
+            scraper.parse_dimensions(text, "РЪЧНО ИЗРАБОТЕНА ЕДИНИЧНА ДЪРВЕНА КУТИЯ С КАРТИ"),
+            (12.5, 9.5, 4.0),
+        )
+
+    def test_tea_box_separate_labels_are_parsed(self):
+        text = (
+            "Размери на кутията: дължина: 22.5 см., широчина: 17.3 см., "
+            "височина: 7 см., Размери на едно отделение: 6.2/7 см., дълбочина 5.5 см."
+        )
+        self.assertEqual(scraper.parse_dimensions(text, "КУТИЯ ЗА ЧАЙ"), (22.5, 17.3, 7.0))
+
+    def test_large_tea_box_separate_labels_are_parsed(self):
+        text = (
+            "Размери на кутията: Дължина: 29 см., Широчина: 19 см., "
+            "Височина: 7.5 см.; Размери на едно отделение: 6/5 см., Дълбочина: 5.5 см."
+        )
+        self.assertEqual(scraper.parse_dimensions(text, "КУТИЯ ЗА ЧАЙ ГОЛЯМА"), (29.0, 19.0, 7.5))
+
+    def test_cutting_board_uses_published_thickness(self):
+        text = "Материал: бук, Дължина: 32 см., Ширина: 13 см., Дебелина: 2 см."
+        self.assertEqual(scraper.parse_dimensions(text, "ДЪСКА ЗА РЯЗАНЕ ОТ БУК 32"), (32.0, 13.0, 2.0))
+
+    def test_white_blank_box_labeled_dimensions_are_parsed(self):
+        text = "Размери: Дължина - 10 см., Широчина - 7 см., Височина: 5 см."
+        self.assertEqual(scraper.parse_dimensions(text, "СРЕДНА КУТИЯ ОТ ДЪРВО"), (10.0, 7.0, 5.0))
+
+    def test_chess_clock_length_width_thickness_are_parsed(self):
+        text = "Размери: Дължина: 15.5 см., Широчина: 14 см., Дебелина: 4.5 см."
+        self.assertEqual(scraper.parse_dimensions(text, "УНИВЕРСАЛЕН ШАХМАТЕН ЧАСОВНИК"), (15.5, 14.0, 4.5))
+
+    def test_white_blank_plate_size_is_diameter_and_thickness(self):
+        text = "Чиния с диаметър 15 см. Размери: 15/1 см."
+        self.assertEqual(scraper.parse_dimensions(text, "ЧИНИЯ ОТ ЛИПА НА БЯЛА ЗАГОТОВКА 15"), (15.0, 15.0, 1.0))
+
+    def test_partial_dimensions_are_preserved_in_package_estimate(self):
+        product = scraper.Product(
+            url="https://oreshak.bg/watch-box",
+            source_category_url="https://oreshak.bg/kutii-za-aksesoari",
+            title="КУТИЯ ЗА ЧАСОВНИЦИ",
+            category_id="12735",
+            partial_dimensions_cm=(38.0, 18.0),
+        )
+        _, dims, notes, _, basis = scraper.package_measurements_for_upload(product, {
+            "package_measurement_mode": "estimate_and_review",
+            "package_dimension_padding_cm": 2.0,
+        })
+        self.assertEqual(dims, (40.0, 20.0, 12.0))
+        self.assertTrue(notes)
+        self.assertIn("published partial", basis)
+
+    def test_implausible_chess_weight_is_blocked(self):
+        product = scraper.Product(
+            url="https://oreshak.bg/chess",
+            source_category_url="https://oreshak.bg/komplekti-shah-i-tabla",
+            title="КОМПЛЕКТ ШАХ И ТАБЛА 48 СМ",
+            category_id="25615",
+            weight_g=0.1,
+            dimensions_cm=(48.0, 24.0, 6.5),
+        )
+        self.assertTrue(scraper.measurement_sanity_errors(product))
+
+    def test_finished_keyrings_are_rejected_not_charms(self):
+        class FakeSchema:
+            category_names = {"39350": "Charms", "10072": "Utility Knives", "13020": "Collectible Figurines"}
+        for title in ("КЛЮЧОДЪРЖАТЕЛ ОТ ЕСТЕСТВЕН ЕЛЕНОВ РОГ", "КЛЮЧОДЪРЖАТЕЛ ОТ ЕСТЕСТВЕНА КОЖА"):
+            product = scraper.Product(url="https://oreshak.bg/p", source_category_url="https://oreshak.bg/nojove-ot-balgaria", title=title)
+            _, reason, confidence = scraper.category_for(product, {}, FakeSchema())
+            self.assertEqual(confidence, "low")
+            self.assertIn("keyring", reason)
+
+    def test_hunting_cleaver_maps_to_utility_knives(self):
+        class FakeSchema:
+            category_names = {"10059": "Chef's Knives", "10072": "Utility Knives"}
+        product = scraper.Product(url="https://oreshak.bg/p", source_category_url="https://oreshak.bg/nojove-ot-balgaria", title="ЛОВЕН САТЪР")
+        category_id, _, confidence = scraper.category_for(product, {}, FakeSchema())
+        self.assertEqual(category_id, "10072")
+        self.assertEqual(confidence, "high")
+
+    def test_flat_white_blank_plate_maps_to_art_board_before_dinner_plate(self):
+        class FakeSchema:
+            category_names = {"39981": "Wood Art Boards", "10808": "Dinner Plates", "13020": "Collectible Figurines"}
+        product = scraper.Product(
+            url="https://oreshak.bg/p",
+            source_category_url="https://oreshak.bg/Wooden-souvenirs-white-blank",
+            title="ЧИНИЯ ОТ ЛИПА НА БЯЛА ЗАГОТОВКА 15",
+        )
+        category_id, _, confidence = scraper.category_for(product, {}, FakeSchema())
+        self.assertEqual(category_id, "39981")
+        self.assertEqual(confidence, "high")
+
+    def test_carved_wall_plate_maps_to_novelty_plate(self):
+        class FakeSchema:
+            category_names = {"10853": "Novelty Plates", "10808": "Dinner Plates"}
+        product = scraper.Product(
+            url="https://oreshak.bg/p",
+            source_category_url="https://oreshak.bg/ruchno-izraboteni-chinii-ot-darvo",
+            title="ЧИНИЯ С ДЪРВОРЕЗБА 22 ЦВЯТ ОРЕХ",
+        )
+        category_id, _, confidence = scraper.category_for(product, {}, FakeSchema())
+        self.assertEqual(category_id, "10853")
+        self.assertEqual(confidence, "high")
+
+    def test_three_dimensional_white_blank_objects_are_rejected(self):
+        class FakeSchema:
+            category_names = {"39981": "Wood Art Boards", "13020": "Collectible Figurines"}
+        for title in (
+            "МУСКАЛ НА БЯЛА ЗАГОТОВКА",
+            "СУВЕНИР ВЕЧЕН КАЛЕНДАР НА БЯЛО",
+            "ДЪРВЕН СВЕЩНИК ОТ ЛИПА НА БЯЛА ЗАГОТОВКА",
+            "ДЪРВЕН САЛФЕТНИК НА БЯЛО",
+        ):
+            product = scraper.Product(url="https://oreshak.bg/p", source_category_url="https://oreshak.bg/Wooden-souvenirs-white-blank", title=title)
+            _, reason, confidence = scraper.category_for(product, {}, FakeSchema())
+            self.assertEqual(confidence, "low", title)
+            self.assertIn("three-dimensional", reason)
+
+    def test_empty_chess_box_is_accessory_and_review(self):
+        class FakeSchema:
+            category_names = {"25613": "Game Pieces", "25615": "Board Games"}
+        product = scraper.Product(
+            url="https://oreshak.bg/p",
+            source_category_url="https://oreshak.bg/kutii-za-shah-i-tabla",
+            title="КУТИЯ ЗА ШАХ ТАБЛА БУК ПИРОГРАФ 48/48",
+            description="Кутията се предлага без аксесоари за игра.",
+        )
+        category_id, reason, confidence = scraper.category_for(product, {}, FakeSchema())
+        self.assertEqual(category_id, "25613")
+        self.assertEqual(confidence, "medium")
+        self.assertIn("empty", reason)
 
 
 if __name__ == "__main__":

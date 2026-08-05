@@ -41,7 +41,7 @@ NS_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 NS_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 NS_XML = "http://www.w3.org/XML/1998/namespace"
 NS = {"a": NS_MAIN, "r": NS_REL}
-PROJECT_VERSION = "6.9"
+PROJECT_VERSION = "7.0"
 MAX_TEMU_ROWS = 2000
 
 SOURCE_DEFAULTS: dict[str, str] = {
@@ -70,9 +70,9 @@ SOURCE_DEFAULTS: dict[str, str] = {
 # only these Temu categories, so every mapping stays inside its valid universe.
 KEYWORD_CATEGORY_RULES: list[tuple[re.Pattern[str], str, str]] = [
     (re.compile(r"\b(монет|coin|жетон)"), "54621", "collectible coin"),
-    (re.compile(r"(ключодърж|талисман|чарм|медальон)"), "39350", "charm/keyring"),
+    (re.compile(r"(талисман|чарм|медальон)"), "39350", "charm component"),
     (re.compile(r"(висулк|пендант|pendant)"), "13027", "pendant ornament"),
-    (re.compile(r"(?:кутия|ракла).*(?:бижут|часовник|пръстен|обеци)|(?:бижут|часовник|пръстен|обеци).*(?:кутия|ракла)"), "12735", "jewelry/watch box"),
+    (re.compile(r"(?:кутия|ракла).*(?:бижут|часовни[кц]|пръстен|обеци)|(?:бижут|часовни[кц]|пръстен|обеци).*(?:кутия|ракла)"), "12735", "jewelry/watch box"),
     (re.compile(r"\bракла\b"), "12179", "decorative storage chest"),
     (re.compile(r"(кутия|кашон).*(подар|gift)"), "39880", "gift box"),
     (re.compile(r"(стойка|поставка|рафт).*(вино|бутил)"), "12686", "wine rack"),
@@ -92,13 +92,13 @@ KEYWORD_CATEGORY_RULES: list[tuple[re.Pattern[str], str, str]] = [
     (re.compile(r"(?:дъска).*(?:рязане|сервира|мезе|сирена|кухнен|домаш|гурме)|(?:кухнен|домаш|гурме).*(?:дъска)|(?:тал[аъ]р)|serving board"), "54423", "serving board"),
     (re.compile(r"\bподнос|tray"), "10741", "serving tray"),
     (re.compile(r"\bплато|platter"), "10740", "platter"),
-    (re.compile(r"чини(я|и).*(пирограф|фолклор|сувенир|закач)|(?:пирограф|фолклор|сувенир).*(чини(я|и))"), "10853", "novelty/decorative plate"),
+    (re.compile(r"чини(я|и).*(пирограф|дърворезб|фолклор|сувенир|закач|окач|стен)|(?:пирограф|дърворезб|фолклор|сувенир|закач|окач|стен).*(чини(я|и))"), "10853", "novelty/decorative plate"),
     (re.compile(r"(десертн).*(чини)|чини.*десерт"), "10807", "dessert plate"),
     (re.compile(r"\bчини(я|и)|plate"), "10808", "dinner plate"),
     (re.compile(r"(поставка|органайзер).*(нож|прибор)"), "10328", "utensil rack"),
     (re.compile(r"(нож).*(хранене|масов)"), "10638", "dinner knife"),
-    (re.compile(r"(нож).*(плод|универсал|ловен|турист|спортен|джоб)|\b(?:ловен|туристически|спортен) нож"), "10072", "utility knife"),
-    (re.compile(r"(кухненски нож|готварски нож|домакински нож|домашен нож|нож.*(?:готвач|сирена)|касапски нож|сатър|chef)"), "10059", "chef knife"),
+    (re.compile(r"(?:ловен|туристически|спортен).*(?:сатър|нож)|(?:сатър|нож).*(?:ловен|туристически|спортен)|(?:нож).*(плод|универсал|джоб)"), "10072", "hunting/utility knife"),
+    (re.compile(r"(кухненски нож|готварски нож|домакински нож|домашен нож|нож.*(?:готвач|сирена)|касапски нож|кухненски сатър|касапски сатър|chef)"), "10059", "chef knife"),
     (re.compile(r"(кутия).*(нож|аксесоар|пура|тютюн)"), "12179", "decorative box"),
     (re.compile(r"(отварачка).*(вино|тирбушон)"), "10875", "wine accessory"),
     (re.compile(r"(отварачка|gadget)"), "9923", "kitchen gadget"),
@@ -134,6 +134,8 @@ LOW_CONFIDENCE_PRODUCT_RULES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bколан\b|\bпафти?\b", re.I), "no belt/apparel-accessory category exists in the supplied Temu template"),
     (re.compile(r"^(?:кожена\s+)?кания\b|^калъф\s+за\s+нож\b|\bножница\b", re.I), "knife sheath is not a knife and no sheath category exists in the supplied Temu template"),
     (re.compile(r"\b(?:колие|гривна|обици)\b", re.I), "no jewelry category exists in the supplied Temu template"),
+    (re.compile(r"ключодърж", re.I), "finished keyring is not a Charms component and no keyring category exists in the supplied Temu template"),
+    (re.compile(r"\b(?:мускал|вечен\s+календар|свещник|салфетник)\b", re.I), "three-dimensional craft object is not a Wood Art Board and no safe category exists in the supplied Temu template"),
 
     # Functional home/kitchen objects for which the supplied template has no
     # defensible leaf category.
@@ -250,6 +252,7 @@ class Product:
     mapping_confidence: str = "medium"
     weight_g: float | None = None
     dimensions_cm: tuple[float, float, float] | None = None
+    partial_dimensions_cm: tuple[float, ...] | None = None
     price_source: str = ""
     list_price_source: str = ""
     stock_source: str = ""
@@ -636,10 +639,12 @@ class OreshakClient:
         product.in_stock, product.stock_source, product.stock_quantity = self._parse_stock(soup, json_ld)
         product.options = self._parse_options(soup)
         source_text = product.description + " " + " ".join(product.attributes.values())
-        product.weight_g = parse_weight(source_text)
-        product.dimensions_cm = parse_dimensions(source_text)
-        product.weight_source = "product description/attributes" if product.weight_g is not None else "missing"
-        product.dimensions_source = "product description/attributes" if product.dimensions_cm is not None else "missing"
+        product.weight_g, product.weight_source = parse_weight_details(source_text)
+        (
+            product.dimensions_cm,
+            product.partial_dimensions_cm,
+            product.dimensions_source,
+        ) = parse_dimensions_details(source_text, product.title)
         if not product.code:
             product.code = self._generated_code(url, product.title)
             product.warnings.append("Product code was generated from URL/title")
@@ -658,11 +663,16 @@ class OreshakClient:
                 else "Weight is not published; estimated package weight will use a category fallback and be marked REVIEW"
             )
         if product.dimensions_cm is None:
-            product.warnings.append(
-                "Complete three-dimensional size is not published; row will be omitted in strict mode"
-                if strict_measurements
-                else "Complete 3D size is not published; estimated package dimensions will use a category fallback and be marked REVIEW"
-            )
+            if product.partial_dimensions_cm:
+                product.warnings.append(
+                    "Only partial outer dimensions are published; known dimensions will be preserved and the missing package dimension will use a category fallback, marked REVIEW"
+                )
+            else:
+                product.warnings.append(
+                    "Complete three-dimensional size is not published; row will be omitted in strict mode"
+                    if strict_measurements
+                    else "Complete 3D size is not published; estimated package dimensions will use a category fallback and be marked REVIEW"
+                )
         if product.list_price_eur is not None and product.price_eur is not None and product.list_price_eur <= product.price_eur:
             product.list_price_eur = None
             product.list_price_source = "discarded because it was not higher than base price"
@@ -1402,132 +1412,265 @@ def _to_cm(value: str, unit: str | None) -> float:
     return number
 
 
-def parse_weight(text: str) -> float | None:
-    # Repair common source typos such as "Т егло" and split words.
-    normalized = re.sub(r"т\s*е\s*г\s*л\s*о", "тегло", text, flags=re.I)
-    patterns = [
-        (r"(?:тегло|weight)(?:\s+на\s+[^:;,➔]{1,60})?\s*:?[\s]*([0-9]+(?:[.,][0-9]+)?)\s*(кг|kg)\b", 1000),
-        (r"(?:тегло|weight)(?:\s+на\s+[^:;,➔]{1,60})?\s*:?[\s]*([0-9]+(?:[.,][0-9]+)?)\s*(гр|грама|г|g)\b", 1),
-    ]
-    for pattern, multiplier in patterns:
-        match = re.search(pattern, normalized, re.I)
-        if match:
-            value = _number(match.group(1)) * multiplier
-            return round(max(value, 0.1), 1)
-    return None
+def _measurement_number(value: str) -> float:
+    cleaned = re.sub(r"\s+", "", value).replace(",", ".")
+    return float(cleaned)
 
 
-def parse_dimensions(text: str) -> tuple[float, float, float] | None:
-    normalized = text.replace(",", ".").replace("×", "x").replace("Х", "x").replace("х", "x")
+def _normalize_measurement_text(text: str) -> str:
+    normalized = unicodedata.normalize("NFKC", text or "")
+    normalized = normalized.replace("×", "x").replace("Х", "x").replace("х", "x")
+    normalized = re.sub(r"(?<=\d)\s*([.,])\s*(?=\d)", r"\1", normalized)
+    # Source typo: "3 9/29" means 39/29, while normal spaces elsewhere stay intact.
     normalized = re.sub(r"(?<=\d)\s+(?=\d\s*[/x])", "", normalized)
-    # Repair source typos/split words such as "Р азмер".
+    normalized = re.sub(r"т\s*е\s*г\s*л\s*о", "тегло", normalized, flags=re.I)
     normalized = re.sub(r"р\s+азмер", "размер", normalized, flags=re.I)
+    return normalize_space(normalized)
 
-    # Explicit length/width/height labels are the most reliable source.
-    l = re.search(r"дължина\s*:?\s*(\d+(?:\.\d+)?)\s*(мм|mm|см|cm|м|m)\b", normalized, re.I)
-    w = re.search(r"ширина\s*:?\s*(\d+(?:\.\d+)?)\s*(мм|mm|см|cm|м|m)\b", normalized, re.I)
-    h = re.search(r"височина\s*:?\s*(\d+(?:\.\d+)?)\s*(мм|mm|см|cm|м|m)\b", normalized, re.I)
-    if l and w and h:
-        vals = (_to_cm(l.group(1), l.group(2)), _to_cm(w.group(1), w.group(2)), _to_cm(h.group(1), h.group(2)))
-        return tuple(round(v, 2) for v in sorted(vals, reverse=True))
 
-    # Some pages state values as "27 см. височина / 16 см. ширина / 5 см. дебелина".
-    labelled: dict[str, float] = {}
-    for value, unit, label in re.findall(
-        r"(\d+(?:\.\d+)?)\s*(мм|mm|см|cm|м|m)[.\s]*(височина|ширина|дебелина|дължина)",
-        normalized,
-        re.I,
-    ):
-        labelled[canonical(label)] = _to_cm(value, unit)
-    if {"височина", "ширина", "дебелина"}.issubset(labelled):
-        vals = [labelled["височина"], labelled["ширина"], labelled["дебелина"]]
-        return tuple(round(v, 2) for v in sorted(vals, reverse=True))
+def parse_weight_details(text: str) -> tuple[float | None, str]:
+    """Return the best source-backed weight in grams and its matched basis.
 
-    thickness_match = re.search(
-        r"дебелина(?:\s+на\s+[^:;,➔]{1,50})?\s*:?\s*(\d+(?:\.\d+)?)\s*(мм|mm|см|cm|м|m)",
-        normalized,
+    Oreshak contains spacing variants such as ``1 .00 кг`` and phrases such as
+    ``Тегло на целия комплект - 2.00 кг``.  All labelled candidates are scored;
+    total-product/complete-set weights outrank incidental component weights.
+    """
+    normalized = _normalize_measurement_text(text)
+    number = r"[0-9]+(?:\s*[.,]\s*[0-9]+)?"
+    unit = r"кг|kg|килограма?|гр(?:\.|ама)?|грама?|г|g"
+    pattern = re.compile(
+        rf"(?P<label>(?:общо\s+)?(?:тегло|weight)(?:\s+на\s+[^:;,.➔]{{0,80}})?)"
+        rf"\s*[:：=\-–—]?\s*(?P<number>{number})\s*(?P<unit>{unit})\b",
         re.I,
     )
-    thickness = _to_cm(thickness_match.group(1), thickness_match.group(2)) if thickness_match else None
-    height_match = re.search(
-        r"височина(?:\s+на\s+[^:;,➔]{1,50})?\s*:?\s*(\d+(?:\.\d+)?)\s*(мм|mm|см|cm|м|m)",
-        normalized,
-        re.I,
-    )
-    explicit_height = _to_cm(height_match.group(1), height_match.group(2)) if height_match else None
-    depth_match = re.search(
-        r"(?:дълбочина|depth)(?:\s+на\s+[^:;,➔]{1,50})?\s*:?\s*(\d+(?:\.\d+)?)\s*(мм|mm|см|cm|м|m)",
-        normalized,
-        re.I,
-    )
-    explicit_depth = None
-    if depth_match:
-        # Internal compartment depth is not an outer product/package dimension.
-        context_before = normalized[max(0, depth_match.start() - 30):depth_match.start()].casefold()
-        if "вътреш" not in context_before and "internal" not in context_before:
-            explicit_depth = _to_cm(depth_match.group(1), depth_match.group(2))
-
-    # Prefer outer/closed/frame dimensions. Keep the text between the label and
-    # the first number short so the regex cannot drift into a later "inner size".
-    priority_patterns = [
-        r"външни\s+размери[^0-9]{0,60}?(\d+(?:\.\d+)?)\s*[/x]\s*(\d+(?:\.\d+)?)(?:\s*[/x]\s*(\d+(?:\.\d+)?))?\s*(мм|mm|см|cm|м|m)",
-        r"(?:размери?\s+)?(?:на\s+кутията\s*)?(?:в\s+)?затворено\s+състояние[^0-9]{0,40}?(\d+(?:\.\d+)?)\s*[/x]\s*(\d+(?:\.\d+)?)(?:\s*[/x]\s*(\d+(?:\.\d+)?))?\s*(мм|mm|см|cm|м|m)",
-        r"кутия\s*:\s*в\s+затворено\s+състояние[^0-9]{0,40}?(\d+(?:\.\d+)?)\s*[/x]\s*(\d+(?:\.\d+)?)(?:\s*[/x]\s*(\d+(?:\.\d+)?))?\s*(мм|mm|см|cm|м|m)",
-        r"размер\s+с\s+рамката[^0-9]{0,40}?(\d+(?:\.\d+)?)\s*[/x]\s*(\d+(?:\.\d+)?)(?:\s*[/x]\s*(\d+(?:\.\d+)?))?\s*(мм|mm|см|cm|м|m)",
-        r"(?:размер(?:и)?(?:\s+на\s+(?!едно отделение|квадратите|платно)[^:;,➔]{1,50})?|dimensions?)\s*:?\s*(\d+(?:\.\d+)?)\s*[/x]\s*(\d+(?:\.\d+)?)(?:\s*[/x]\s*(\d+(?:\.\d+)?))?\s*(мм|mm|см|cm|м|m)",
-    ]
-    for pattern in priority_patterns:
-        match = re.search(pattern, normalized, re.I)
-        if not match:
+    candidates: list[tuple[int, float, str]] = []
+    for match in pattern.finditer(normalized):
+        value = _measurement_number(match.group("number"))
+        unit_key = canonical(match.group("unit"))
+        if unit_key in {"кг", "kg", "килограм", "килограма"}:
+            value *= 1000.0
+        if not 0 < value <= 500_000:
             continue
-        a, b, c, unit = match.groups()
-        dims = [_to_cm(a, unit), _to_cm(b, unit)]
-        if c:
-            dims.append(_to_cm(c, unit))
-        else:
-            inferred = thickness or explicit_height or explicit_depth
-            # Tiny square dice/game pieces are cubes. This is the only safe
-            # geometric inference from two equal published measurements.
-            if inferred is None and max(dims) <= 1.5 and abs(dims[0] - dims[1]) <= 0.05:
-                inferred = dims[0]
-            # Do not manufacture a third dimension for flat textiles, paintings,
-            # spoons, boxes, etc. The writer will use a category fallback and
-            # flag the row for review instead.
-            if inferred is None:
+        label = normalize_space(match.group("label"))
+        context = normalized[max(0, match.start() - 45): min(len(normalized), match.end() + 25)].casefold()
+        score = 10
+        if re.search(r"целия|целият|общо|комплект|продукт|издели|кутия", label, re.I):
+            score += 30
+        if re.search(r"пешк|фигур|зарч|дръжк|острие|отделн", context, re.I):
+            score -= 25
+        # Prefer a meaningful larger candidate when scores tie.
+        candidates.append((score, value, f"published label: {label} = {match.group('number')} {match.group('unit')}"))
+    if not candidates:
+        return None, "missing"
+    score, value, source = max(candidates, key=lambda item: (item[0], item[1]))
+    return round(max(value, 0.1), 1), source
+
+
+def parse_weight(text: str) -> float | None:
+    return parse_weight_details(text)[0]
+
+
+def parse_dimensions_details(
+    text: str, title: str = ""
+) -> tuple[tuple[float, float, float] | None, tuple[float, ...] | None, str]:
+    """Return full dimensions, partial dimensions and a traceable source.
+
+    Outer/closed/product dimensions outrank inner compartments, chess squares,
+    material thickness and component measurements.  When only two genuine outer
+    dimensions are published, they are retained as partial data so package
+    estimation can preserve them instead of replacing the entire size with a
+    category fallback.
+    """
+    normalized = _normalize_measurement_text(text)
+    title_key = canonical(title)
+    number = r"[0-9]+(?:\s*[.,]\s*[0-9]+)?"
+    units = r"мм|mm|см|cm|м|m"
+    candidates: list[tuple[int, tuple[float, ...], str]] = []
+
+    def add(score: int, values: Sequence[float], source: str) -> None:
+        cleaned = tuple(round(max(float(v), 0.1), 2) for v in values if float(v) > 0)
+        if len(cleaned) not in (2, 3):
+            return
+        # Reject implausible parsing artifacts, but allow millimetre-scale pieces.
+        if any(v > 1000 for v in cleaned):
+            return
+        candidates.append((score, tuple(sorted(cleaned, reverse=True)), source))
+
+    def unit_value(raw: str, unit: str | None) -> float:
+        return _to_cm(re.sub(r"\s+", "", raw), unit)
+
+    internal_marker = re.compile(
+        r"вътрешн(?:и|а|о)?\s+(?:размери|дълбочина)|"
+        r"размери?\s+на\s+(?:едно\s+)?отделение|"
+        r"размери?\s+на\s+(?:квадрат(?:ите)?|полето|пешк(?:а|ата)|царя|фигур(?:а|ите)?)|"
+        r"височина\s+на\s+(?:пешк|цар|фигур)|"
+        r"дължина\s+на\s+(?:острието|дръжката)",
+        re.I,
+    )
+
+    # Exact outer/closed/frame triplets and pairs.
+    labelled_triplet_patterns = [
+        (100, r"външни\s+размери"),
+        (99, r"кутия(?:та)?\s*:\s*(?:в\s+)?затворено\s+състояние"),
+        (98, r"размери?\s+(?:на\s+кутията\s+)?(?:в\s+)?затворено\s+състояние"),
+        (96, r"размер\s+с\s+рамката"),
+        (94, r"размери?\s+на\s+(?:кутията|продукта|изделието)"),
+        (90, r"размери?\s+на\s+(?!едно\s+отделение|отделението|квадрат(?:ите)?|полето|пешк|цар|фигур)[^:;,➔]{1,55}"),
+        (80, r"(?:размер|размери|dimensions?)"),
+    ]
+    for base_score, label_pattern in labelled_triplet_patterns:
+        pattern = re.compile(
+            rf"{label_pattern}[^0-9]{{0,70}}?({number})\s*[/x]\s*({number})"
+            rf"(?:\s*[/x]\s*({number}))?\s*({units})\b",
+            re.I,
+        )
+        for match in pattern.finditer(normalized):
+            before = normalized[max(0, match.start() - 55):match.start()]
+            nearby = normalized[max(0, match.start() - 35):min(len(normalized), match.end() + 55)]
+            if internal_marker.search(match.group(0)) or internal_marker.search(before[-45:]):
                 continue
-            dims.append(inferred)
-        return tuple(round(v, 2) for v in sorted((max(v, 0.1) for v in dims), reverse=True))
+            a, b, c, unit = match.groups()
+            values = [unit_value(a, unit), unit_value(b, unit)]
+            if c:
+                values.append(unit_value(c, unit))
+                add(base_score, values, f"{normalize_space(match.group(0))}")
+            else:
+                # Equal tiny game pieces are safely cubic.
+                if max(values) <= 1.5 and abs(values[0] - values[1]) <= 0.05:
+                    add(base_score, [values[0], values[1], values[0]], f"tiny cubic size: {normalize_space(match.group(0))}")
+                else:
+                    add(base_score - 12, values, f"published 2D size: {normalize_space(match.group(0))}")
 
-    # One overall size plus a height (common for round/square trays and ashtrays).
-    single_size = re.search(r"размер(?:и)?\s*:?\s*(\d+(?:\.\d+)?)\s*(мм|mm|см|cm|м|m)", normalized, re.I)
-    if single_size and explicit_height:
-        side = _to_cm(single_size.group(1), single_size.group(2))
-        return tuple(round(v, 2) for v in sorted((side, side, explicit_height), reverse=True))
+    # Parse labelled length/width/height inside an explicit size section. Stop
+    # before an inner-compartment section so its values cannot replace the box.
+    section_pattern = re.compile(
+        r"(?:външни\s+размери|размери?\s+на\s+(?:кутията|продукта|изделието)|размери?\s+на\s+(?!едно\s+отделение|отделението|квадрат(?:ите)?|полето|пешк|цар|фигур)[^:;,➔]{1,55}|размери?|dimensions?)\s*[:：=\-]?",
+        re.I,
+    )
+    flat_object = bool(re.search(r"дъск|чини|пано|табел|плакет|пластик|картина|плато|поднос", title_key, re.I))
+    for section in section_pattern.finditer(normalized):
+        body = normalized[section.end(): section.end() + 260]
+        split = internal_marker.search(body)
+        if split:
+            body = body[:split.start()]
 
-    diameter = re.search(r"(?:диаметър|ф|Ø)\s*:?\s*(\d+(?:\.\d+)?)\s*(мм|mm|см|cm|м|m)?", normalized, re.I)
-    if diameter:
-        d = _to_cm(diameter.group(1), diameter.group(2))
-        third = thickness or explicit_height or explicit_depth
-        if third is None:
-            return None
-        return round(d, 2), round(d, 2), round(third, 2)
+        def first_label(label_pattern: str) -> tuple[float, str] | None:
+            match = re.search(
+                rf"{label_pattern}\s*[:：=\-–—]?\s*({number})\s*({units})\b",
+                body,
+                re.I,
+            )
+            return (unit_value(match.group(1), match.group(2)), normalize_space(match.group(0))) if match else None
 
-    # Tall narrow objects sometimes publish height and opening only.
-    opening = re.search(r"отвор\s*:?\s*(\d+(?:\.\d+)?)\s*(мм|mm|см|cm|м|m)", normalized, re.I)
-    if explicit_height and opening:
-        d = _to_cm(opening.group(1), opening.group(2))
-        return tuple(round(v, 2) for v in sorted((explicit_height, d, d), reverse=True))
+        length = first_label(r"дължина")
+        width = first_label(r"шир(?:оч)?ина")
+        height = first_label(r"височина")
+        depth = first_label(r"дълбочина")
+        thickness = first_label(r"дебелина(?:\s+на\s+(?!дървото)[^:;,.]{1,40})?")
+        wood_thickness = first_label(r"дебелина\s+на\s+дървото")
+        third = height or depth or thickness or (wood_thickness if flat_object else None)
+        if length and width and third:
+            add(110, [length[0], width[0], third[0]], f"labelled outer dimensions: {length[1]}; {width[1]}; {third[1]}")
+        elif length and width:
+            add(88, [length[0], width[0]], f"labelled outer 2D dimensions: {length[1]}; {width[1]}")
 
-    blade = re.search(r"дължина на острието\s*:?\s*(\d+(?:\.\d+)?)\s*см", normalized, re.I)
-    handle = re.search(r"дължина на дръжката\s*:?\s*(\d+(?:\.\d+)?)\s*см", normalized, re.I)
-    total = re.search(r"обща дължина\s*:?\s*(\d+(?:\.\d+)?)\s*см", normalized, re.I)
-    if total or blade:
-        length = float((total or blade).group(1))
-        if not total and handle:
-            length += float(handle.group(1))
-        return round(length + 3, 1), 8.0, 5.0
-    return None
+    # Global labelled dimensions handle pages that omit a leading "Размери".
+    sanitized = internal_marker.sub(" INTERNAL_MEASUREMENT ", normalized)
+    # Remove short internal clauses through the next separator.
+    sanitized = re.sub(
+        r"INTERNAL_MEASUREMENT[^.;➔]{0,140}", " ", sanitized, flags=re.I
+    )
 
+    def global_label(label_pattern: str) -> tuple[float, str] | None:
+        match = re.search(
+            rf"{label_pattern}\s*[:：=\-–—]?\s*({number})\s*({units})\b",
+            sanitized,
+            re.I,
+        )
+        return (unit_value(match.group(1), match.group(2)), normalize_space(match.group(0))) if match else None
+
+    length = global_label(r"дължина(?!\s+на\s+(?:острието|дръжката))")
+    width = global_label(r"шир(?:оч)?ина(?!\s+на\s+острието)")
+    height = global_label(r"височина(?!\s+на\s+(?:пешк|цар|фигур))")
+    depth = global_label(r"дълбочина")
+    thickness = global_label(r"дебелина(?:\s+на\s+(?!дървото)[^:;,.]{1,40})?")
+    wood_thickness = global_label(r"дебелина\s+на\s+дървото")
+    third = height or depth or thickness or (wood_thickness if flat_object else None)
+    if length and width and third:
+        add(90, [length[0], width[0], third[0]], f"separate labelled dimensions: {length[1]}; {width[1]}; {third[1]}")
+    elif length and width:
+        add(70, [length[0], width[0]], f"separate labelled 2D dimensions: {length[1]}; {width[1]}")
+
+    # Diameter plus thickness/height is a complete round-object measurement.
+    round_object = bool(re.search(r"чини|plate|пепелник|купа|медальон|монет|диск|кръгл", title_key, re.I))
+    diameter_matches = list(re.finditer(rf"(?:диаметър|ф|Ø)\s*[:：=\-]?\s*({number})\s*({units})?", sanitized, re.I))
+    if diameter_matches and round_object:
+        diameter_match = diameter_matches[0]
+        d = unit_value(diameter_match.group(1), diameter_match.group(2) or "cm")
+        round_third = (wood_thickness if flat_object else None) or thickness or height or depth
+        if round_third:
+            add(95, [d, d, round_third[0]], f"diameter and thickness/height: {normalize_space(diameter_match.group(0))}; {round_third[1]}")
+        else:
+            add(72, [d, d], f"published diameter only: {normalize_space(diameter_match.group(0))}")
+
+    # Generic size groups. Context scoring prevents inner compartments and game
+    # components from winning over an outer/product size.
+    generic = re.compile(
+        rf"({number})\s*[/x]\s*({number})(?:\s*[/x]\s*({number}))?\s*({units})\b",
+        re.I,
+    )
+    for match in generic.finditer(normalized):
+        context = normalized[max(0, match.start() - 85):min(len(normalized), match.end() + 45)]
+        if internal_marker.search(context):
+            continue
+        values = [unit_value(match.group(1), match.group(4)), unit_value(match.group(2), match.group(4))]
+        third_raw = match.group(3)
+        score = 40
+        if re.search(r"външ|затворено|размери?\s+на\s+(?:кутията|продукта)|размер\s+с\s+рамката", context, re.I):
+            score += 45
+        elif re.search(r"размер", context, re.I):
+            score += 20
+        if third_raw:
+            values.append(unit_value(third_raw, match.group(4)))
+            add(score, values, f"published size group: {normalize_space(match.group(0))}")
+        else:
+            # Craft plates often publish diameter/thickness as 15/1 cm.
+            is_plate = bool(re.search(r"чини|plate", title_key, re.I))
+            if is_plate and max(values) >= 5 and min(values) <= max(values) / 3:
+                d, t = max(values), min(values)
+                add(score + 35, [d, d, t], f"plate diameter/thickness size: {normalize_space(match.group(0))}")
+            elif max(values) <= 1.5 and abs(values[0] - values[1]) <= 0.05:
+                add(score + 20, [values[0], values[1], values[0]], f"tiny cubic size: {normalize_space(match.group(0))}")
+            elif third:
+                add(score + 18, [values[0], values[1], third[0]], f"published 2D size plus external third dimension: {normalize_space(match.group(0))}; {third[1]}")
+            else:
+                add(score, values, f"published 2D size group: {normalize_space(match.group(0))}")
+
+    # Knives/cleavers publish total length and blade width, but usually not
+    # thickness. Preserve those as partial dimensions; do not invent 8 × 5 cm.
+    total_lengths = [
+        unit_value(m.group(1), m.group(2))
+        for m in re.finditer(rf"обща\s+дължина\s*[:：=\-]?\s*({number})\s*({units})\b", normalized, re.I)
+    ]
+    blade_widths = [
+        unit_value(m.group(1), m.group(2))
+        for m in re.finditer(rf"ширина\s+на\s+острието\s*[:：=\-]?\s*({number})\s*({units})\b", normalized, re.I)
+    ]
+    if total_lengths and blade_widths:
+        add(75, [max(total_lengths), max(blade_widths)], "knife/cleaver total length and maximum blade width")
+
+    if not candidates:
+        return None, None, "missing"
+    full = [candidate for candidate in candidates if len(candidate[1]) == 3]
+    if full:
+        score, dims, source = max(full, key=lambda item: (item[0], math.prod(item[1])))
+        return (dims[0], dims[1], dims[2]), None, source
+    score, dims, source = max(candidates, key=lambda item: (item[0], math.prod(item[1])))
+    return None, dims, source
+
+
+def parse_dimensions(text: str, title: str = "") -> tuple[float, float, float] | None:
+    return parse_dimensions_details(text, title)[0]
 
 def choose_valid(values: Sequence[str], candidates: Sequence[str], fallback_first: bool = True) -> str:
     real_values = [v for v in values if v and not v.startswith("Must first finish")]
@@ -1619,14 +1762,29 @@ def category_for(product: Product, overrides: Mapping[str, str], schema: Templat
     # Category detection must be driven by the product identity, not generic words such as
     # "gift" or "wood" appearing later in the description.
     title_only = normalize_space(product.title).casefold()
+    source_slug = slug_key(product.source_category_url)
     for pattern, reason in LOW_CONFIDENCE_PRODUCT_RULES:
         if pattern.search(title_only):
-            default = SOURCE_DEFAULTS.get(slug_key(product.source_category_url), "13020")
+            default = SOURCE_DEFAULTS.get(source_slug, "13020")
             return default, reason, "low"
+
+    # High-value source-specific rules that must run before broad words such as
+    # "plate", "board game" or the source-category default.
+    if re.search(r"(?:кутия|органайзер).*(?:часовни[кц]|пръстен|обеци|бижут)|(?:часовни[кц]|пръстен|обеци|бижут).*(?:кутия|органайзер)", title_only, re.I):
+        if "12735" in schema.category_names:
+            return "12735", "jewelry/watch storage box", "high"
+    if source_slug == "wooden-souvenirs-white-blank" and re.search(r"(?:чини|дъск|табел|плакет|пано).*(?:бял|заготовк)|(?:бял|заготовк).*(?:чини|дъск|табел|плакет|пано)", title_only, re.I):
+        if "39981" in schema.category_names:
+            return "39981", "flat wooden craft blank", "high"
+    if re.search(r"шахматен\s+часовник", title_only, re.I) and "25613" in schema.category_names:
+        return "25613", "chess clock accessory; closest supplied category", "medium"
+    if re.search(r"(?:кутия|дъска).*(?:шах|табла)|(?:шах|табла).*(?:кутия|дъска)", title_only, re.I):
+        if re.search(r"без\s+(?:фигур|аксесоар|пулов)|празн", normalize_space(product.description).casefold(), re.I):
+            return "25613", "empty chess/backgammon board or box accessory; closest supplied category", "medium"
+
     for pattern, category_id, reason in KEYWORD_CATEGORY_RULES:
         if pattern.search(title_only) and category_id in schema.category_names:
             return category_id, reason, "high"
-    source_slug = slug_key(product.source_category_url)
     if source_slug == "kuhnenski-aksesoari-ot-darvo-oreshak" and re.search(r"\bдъск", title_only) and "54423" in schema.category_names:
         return "54423", "kitchen-source cutting/serving board", "high"
     default = SOURCE_DEFAULTS.get(source_slug, "13020")
@@ -1955,10 +2113,19 @@ def package_measurements_for_upload(
 
     if mode != "estimate_and_review":
         weight = float(product.weight_g if product.weight_g is not None else default_weight)
-        dims = tuple(float(v) for v in (product.dimensions_cm or (default_l, default_w, default_h)))
+        if product.dimensions_cm is not None:
+            dims = tuple(float(v) for v in product.dimensions_cm)
+            dims_basis = "published product dimensions"
+        elif product.partial_dimensions_cm:
+            known = sorted((float(v) for v in product.partial_dimensions_cm), reverse=True)
+            fallback = sorted((float(default_l), float(default_w), float(default_h)), reverse=True)
+            dims = tuple((known + fallback[len(known):])[:3])
+            dims_basis = "published partial dimensions plus category fallback"
+        else:
+            dims = (float(default_l), float(default_w), float(default_h))
+            dims_basis = "category fallback"
         weight_basis = "published product weight" if product.weight_g is not None else "category fallback"
-        dims_basis = "published product dimensions" if product.dimensions_cm is not None else "category fallback"
-        return weight, dims, notes, weight_basis, dims_basis
+        return weight, tuple(sorted(dims, reverse=True)), notes, weight_basis, dims_basis
 
     padding_cm = max(0.0, float(config.get("package_dimension_padding_cm", 2.0)))
     weight_percent = max(0.0, float(config.get("package_weight_padding_percent", 10.0)))
@@ -1985,6 +2152,19 @@ def package_measurements_for_upload(
             "estimated package dimensions: published "
             + " × ".join(f"{v:g}" for v in source_dims)
             + f" cm + {padding_cm:g} cm packing allowance per dimension"
+        )
+        notes.append(dims_basis)
+    elif product.partial_dimensions_cm and not ambiguous_reason:
+        known = sorted((float(v) for v in product.partial_dimensions_cm), reverse=True)
+        fallback = sorted((float(default_l), float(default_w), float(default_h)), reverse=True)
+        padded_known = [v + padding_cm for v in known]
+        missing = fallback[len(known):]
+        dims = tuple(sorted((padded_known + missing)[:3], reverse=True))
+        dims_basis = (
+            "estimated package dimensions: published partial "
+            + " × ".join(f"{v:g}" for v in known)
+            + f" cm + {padding_cm:g} cm packing allowance on known dimensions; "
+            + "missing dimension from category fallback"
         )
         notes.append(dims_basis)
     else:
@@ -2019,6 +2199,31 @@ def source_measurement_errors(product: Product, config: Mapping[str, Any]) -> li
         if reason:
             errors.append(reason)
     return errors
+
+
+def measurement_sanity_errors(product: Product) -> list[str]:
+    """Block clearly impossible source measurements even in REVIEW mode."""
+    errors: list[str] = []
+    dimensions = product.dimensions_cm or product.partial_dimensions_cm
+    max_dimension = max(dimensions) if dimensions else None
+    title = normalize_space(product.title).casefold()
+    source = normalize_space(product.dimensions_source).casefold()
+
+    if product.weight_g is not None and max_dimension is not None:
+        if max_dimension >= 20 and product.weight_g < 5:
+            errors.append(
+                f"Implausible source measurement: {product.weight_g:g} g for an item {max_dimension:g} cm long"
+            )
+        if (
+            product.category_id in {"25615", "51777"}
+            or re.search(r"комплект.*(?:шах|табла)|(?:шах|табла).*комплект", title, re.I)
+        ) and max_dimension >= 30 and product.weight_g < 300:
+            errors.append(
+                f"Implausible chess/board-game weight: {product.weight_g:g} g for {max_dimension:g} cm product"
+            )
+    if re.search(r"отделение|вътреш|квадрат|пешк|цар", source, re.I):
+        errors.append("Internal/component dimensions were selected as product dimensions")
+    return dedupe(errors)
 
 
 def prices_for_upload(product: Product, config: Mapping[str, Any]) -> tuple[Decimal | None, Decimal | None, str]:
@@ -2153,6 +2358,7 @@ def build_row(variant: Variant, schema: TemplateSchema, config: Mapping[str, Any
     if product.mapping_confidence == "low":
         errors.append(f"No safe Temu category mapping: {product.mapping_reason}; add category_overrides.csv entry")
     errors.extend(source_measurement_errors(product, config))
+    errors.extend(measurement_sanity_errors(product))
     return row, dedupe(errors), dedupe(review_notes)
 
 
@@ -2255,10 +2461,12 @@ def raw_product_row(product: Product, config: Mapping[str, Any]) -> dict[str, An
         "upload_price_basis": upload_price_basis,
         "availability": "in_stock" if product.in_stock else "out_of_stock", "stock_source": product.stock_source, "stock_quantity": product.stock_quantity,
         "weight_g": product.weight_g, "weight_source": product.weight_source,
-        "length_cm": product.dimensions_cm[0] if product.dimensions_cm else "",
-        "width_cm": product.dimensions_cm[1] if product.dimensions_cm else "",
+        "known_dimension_count": len(product.dimensions_cm or product.partial_dimensions_cm or ()),
+        "length_cm": (product.dimensions_cm or product.partial_dimensions_cm or ("",))[0],
+        "width_cm": (product.dimensions_cm or product.partial_dimensions_cm or ("", ""))[1] if len(product.dimensions_cm or product.partial_dimensions_cm or ()) >= 2 else "",
         "height_cm": product.dimensions_cm[2] if product.dimensions_cm else "",
         "dimensions_source": product.dimensions_source,
+        "measurement_sanity_issues": " | ".join(measurement_sanity_errors(product)),
         "package_weight_g": package_weight,
         "package_length_cm": max(package_dims),
         "package_width_cm": sorted(package_dims, reverse=True)[1],
@@ -2281,6 +2489,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=10, help="Maximum source products overall; 0 means all")
     parser.add_argument("--limit-per-category", type=int, default=0, help="Maximum products from each category; 0 means all")
     parser.add_argument("--category", action="append", help="Run only URL/slug containing this value")
+    parser.add_argument("--url-file", help="CSV containing product_url and source_category_url for a targeted regression run")
     parser.add_argument("--schema-only", action="store_true", help="Validate template/config without scraping")
     return parser.parse_args()
 
@@ -2314,22 +2523,42 @@ def main() -> int:
         client = OreshakClient(config)
         discovered: list[tuple[str, str]] = []
         seen_links: set[str] = set()
-        for category_url in category_urls:
-            try:
-                links = client.discover_product_links(category_url)
-            except Exception as exc:
-                logging.exception("Category failed: %s: %s", category_url, exc)
-                continue
-            if args.limit_per_category:
-                links = links[:args.limit_per_category]
-            for link in links:
-                if link not in seen_links:
+        targeted_expected_codes: dict[str, str] = {}
+        if args.url_file:
+            url_file = Path(args.url_file)
+            if not url_file.is_absolute():
+                url_file = (base_dir / url_file).resolve()
+            with url_file.open("r", encoding="utf-8-sig", newline="") as handle:
+                for row in csv.DictReader(handle):
+                    link = normalize_space(row.get("product_url"))
+                    category_url = normalize_space(row.get("source_category_url"))
+                    if not link or not category_url or link in seen_links:
+                        continue
                     seen_links.add(link)
                     discovered.append((link, category_url))
-                    if args.limit and len(discovered) >= args.limit:
-                        break
-            if args.limit and len(discovered) >= args.limit:
-                break
+                    expected_code = normalize_space(row.get("expected_product_code"))
+                    if expected_code:
+                        targeted_expected_codes[link] = expected_code
+            logging.info("Loaded %s targeted product URLs from %s", len(discovered), url_file)
+        else:
+            for category_url in category_urls:
+                try:
+                    links = client.discover_product_links(category_url)
+                except Exception as exc:
+                    logging.exception("Category failed: %s: %s", category_url, exc)
+                    continue
+                if args.limit_per_category:
+                    links = links[:args.limit_per_category]
+                for link in links:
+                    if link not in seen_links:
+                        seen_links.add(link)
+                        discovered.append((link, category_url))
+                        if args.limit and len(discovered) >= args.limit:
+                            break
+                if args.limit and len(discovered) >= args.limit:
+                    break
+        if args.limit:
+            discovered = discovered[:args.limit]
         logging.info("Discovered %s unique products", len(discovered))
 
         products: list[Product] = []
@@ -2338,6 +2567,9 @@ def main() -> int:
             logging.info("Product %s/%s: %s", index, len(discovered), url)
             try:
                 product = client.parse_product(url, category_url)
+                expected_code = targeted_expected_codes.get(url)
+                if expected_code and product.code != expected_code:
+                    raise ValueError(f"Targeted regression URL returned code {product.code!r}; expected {expected_code!r}")
                 ensure_product_description(product)
                 product.category_id, product.mapping_reason, product.mapping_confidence = category_for(product, overrides, schema)
                 if product.mapping_confidence != "high":
@@ -2390,8 +2622,8 @@ def main() -> int:
             "product_code", "product_name", "source_category", "temu_category_id", "temu_mapping_reason",
             "mapping_confidence", "description", "price_eur", "list_price_eur", "price_source", "list_price_source",
             "upload_price_eur", "upload_list_price_eur", "upload_price_basis",
-            "availability", "stock_source", "stock_quantity", "weight_g", "weight_source", "length_cm", "width_cm", "height_cm",
-            "dimensions_source", "package_weight_g", "package_length_cm", "package_width_cm", "package_height_cm",
+            "availability", "stock_source", "stock_quantity", "weight_g", "weight_source", "known_dimension_count", "length_cm", "width_cm", "height_cm",
+            "dimensions_source", "measurement_sanity_issues", "package_weight_g", "package_length_cm", "package_width_cm", "package_height_cm",
             "package_weight_basis", "package_dimensions_basis", "package_review_notes",
             "product_url", "images", "attributes_json", "options_json", "warnings",
         ]
